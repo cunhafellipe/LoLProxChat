@@ -807,8 +807,10 @@ export class Orchestrator {
     this.tracking.setCameraHearing?.(cameraOnly ? this.cameraHearing : null);
     if (cameraOnly && this.cameraHearing?.hasPlayers()) {
       // Peers on proximity score us from coordinates; camera mode sends none,
-      // and withdraws any sent before it engaged.
-      this.disownCoords();
+      // and withdraws any sent before it engaged — the sighting too: the
+      // tracker goes on following us here, so a sighting would be our live
+      // position, sent anew every tick.
+      this.disownCoords(/*withSighting*/ false);
       this.applyCameraVolumes(this.cameraHearing);
       this.broadcastOverlayState();
       return;
@@ -1028,13 +1030,16 @@ export class Orchestrator {
    * Otherwise idempotent: `coordsDisowned` is cleared only when real
    * coordinates start flowing again, so this sends one message, or two,
    * however long the episode lasts.
+   *
+   * Camera mode passes `withSighting` false: a plain disown, at (0,0), which
+   * the server reads as "nowhere" and which carries no place of ours at all.
    */
-  private disownCoords(): void {
-    const seen = this.tracking?.getLastSeenPosition(LOST_ALLY_ANCHOR_MS) ?? null;
+  private disownCoords(withSighting = true): void {
+    const seen = withSighting ? (this.tracking?.getLastSeenPosition(LOST_ALLY_ANCHOR_MS) ?? null) : null;
     if (this.coordsDisowned && seen === this.disownedWith) return;
     const position = this.tracking?.getLastPosition() ?? null;
     if (!this.coordsDisowned && (!position || (position.x === 0 && position.y === 0))) return;
-    const at = seen ?? position ?? this.disownedWith;
+    const at = withSighting ? (seen ?? position ?? this.disownedWith) : { x: 0, y: 0 };
     if (!at) return;
     this.coordsDisowned = true;
     this.disownedWith = seen;

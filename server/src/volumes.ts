@@ -543,9 +543,10 @@ export function computeTieredVolumes(
 
     // Camera BOX (clients that send its size): a peer whose champion is inside
     // the rectangle on the requester's screen is heard at full volume. It
-    // replaces the centre-plus-range test for these clients; an enemy still
-    // has to pass the visibility check above, so the camera reaches only what
-    // is already on screen.
+    // replaces the centre-plus-range test for these clients. Our client sends
+    // its visible enemies with every box, so an enemy also has to pass the
+    // check above; one that omits them is bounded by the clamped box size
+    // (validate.ts), around a centre it could already claim anywhere.
     const box = bothOptedIn && myCamera!.w !== undefined && myCamera!.h !== undefined
       ? { x: myCamera!.x, y: myCamera!.y, w: myCamera!.w, h: myCamera!.h }
       : null;
