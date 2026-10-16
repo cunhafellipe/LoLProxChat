@@ -245,8 +245,8 @@ describe('panel settings across sessions', () => {
       setAllyProximity(false);
       await jest.advanceTimersByTimeAsync(500);
       expect(changed()).toEqual([
-        '[LoLProxChat] Settings changed: cameraMode=true allyProximity=false voiceOnCamera=true sharedReset=true' +
-          ' (was cameraMode=true allyProximity=true voiceOnCamera=true sharedReset=true)',
+        '[LoLProxChat] Settings changed: cameraMode=true allyProximity=false voiceOnCamera=true sharedReset=false' +
+          ' (was cameraMode=true allyProximity=true voiceOnCamera=true sharedReset=false)',
       ]);
     } finally {
       clearStoredPrefs();

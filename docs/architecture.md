@@ -8,6 +8,8 @@ LoLProxChat reads your in-game position by **computer vision on the minimap**, r
 
 No client ever sees another client's raw position; the server returns only `{ peerName: volume }`. No audio touches the server.
 
+**Camera mode** (the default since v0.5.24) skips the server's volumes altogether: the client finds its camera rectangle on the minimap, works out whose icons are inside it, and plays exactly those players. It sends the server no position while on.
+
 ## System map
 
 ```
@@ -65,16 +67,18 @@ No client ever sees another client's raw position; the server returns only `{ pe
    └────────────────────────┘    └────────────────────────┘
 ```
 
-## The three windows
+## The windows
 
-The client runs two Tauri windows, both inside a single WebView2 process:
+The client runs three Tauri windows, all inside a single WebView2 process:
 
 - **`overlay`** — the **panel** window. Draggable, holds the player list and Settings. Visible, captures input over its hit-rect, click-through everywhere else (via a 30 Hz cursor-position polling loop in `main.rs`).
 - **`scanner`** — a transparent click-through window auto-pinned over the detected minimap region. It stays empty, even in Debug: the tracked-position marker and the filtered minimap preview both live in the panel's Settings, deliberately kept out of the scanner so they can't be captured back into the minimap image the tracker reads.
 
-A short-lived third "window" is the splash visible at startup before the orchestrator boots; it's just the panel before CV locks on.
+- **`speakers`** (since v0.5.24) — a small click-through list, pinned near the top-left of the game window, of who is talking right now, with each player's champion icon (`src/speakers/`, fed by the orchestrator over a Tauri event). Hidden outside a game. It renders names with `textContent`, never as HTML.
 
-Both windows are declared in `src-tauri/tauri.conf.json`. Both have transparent backgrounds, no decorations, `alwaysOnTop`, no shadow. Capability grants live at `src-tauri/capabilities/default.json` (drag + event emit/listen — without this Tauri 2 silently denies built-in IPC).
+The splash visible at startup before the orchestrator boots is just the panel before CV locks on.
+
+All three are declared in `src-tauri/tauri.conf.json`. All have transparent backgrounds, no decorations, `alwaysOnTop`, no shadow. Capability grants live at `src-tauri/capabilities/default.json` (drag + event emit/listen — without this Tauri 2 silently denies built-in IPC).
 
 ## The CV pipeline (`src/services/tracking.ts`)
 
@@ -115,9 +119,10 @@ Edge cases the state machine handles: champion deaths (see **Death** below), res
 
 This is the part that matters for both the threat model and the "what does the server see" question.
 
-1. On every position tick (~10 Hz), the client sends a `coords` WebSocket message: `{ type: "coords", x, y }`, plus `stale: true` when disowning a lost position and `cx, cy` (the camera centre) only while **Voice on camera** is on. The server stamps it with the current time and stores it on the sender's room-client record.
+1. On every position tick (~10 Hz), the client sends a `coords` WebSocket message: `{ type: "coords", x, y }`, plus `stale: true` when disowning a lost position, `cx, cy` (the camera centre) and `cw, ch` (the camera rectangle's size, since v0.5.24) only while **Voice on camera** is on, and `vis` (since v0.5.24): the enemy icons its minimap draws, at most 10, as `[x, y]` or `[x, y, n]` for a merged icon. The server stamps it with the current time and stores it on the sender's room-client record, clamping the camera size to 5000 × 2400 (`server/src/validate.ts`).
 2. Immediately after, the client POSTs `/compute-volumes` with `{ myPosition, roomId, name }`. The server reads the latest position for every *other* client in the room (skipping any whose last `coords` is older than 5 s) and returns `{ peerVolumes: { peerName: volume } }`.
-3. Volume math: full volume up to `FULL_VOLUME_RANGE = 900` game units, then a quadratic fade to zero at `MAX_HEARING_RANGE = 1350` (≈ champion vision range); continuous float in `[0, 1]`. Allies return 1.0 unless the requester has ally proximity on (the client default since v0.5.18), in which case they use the same falloff — an ally with no fresh position is scored at the last position they reported, if that was within 20 s (`LOST_ALLY_ANCHOR_MS`; `lastSeen`, the sighting the client sends with its disown), and otherwise stays at 1.0 until found; cross-team peers use the falloff and are omitted entirely beyond the range. With **Voice on camera** on for *both* players, the requester's stored camera is an extra point it listens from — never one it is heard at — so the pair is scored on the closer of champion→champion and camera→champion. See `server/src/volumes.ts`.
+3. Volume math: full volume up to `FULL_VOLUME_RANGE = 900` game units, then a quadratic fade to zero at `MAX_HEARING_RANGE = 1350` (≈ champion vision range); continuous float in `[0, 1]`. Allies return 1.0 unless the requester has ally proximity on (the client default since v0.5.18), in which case they use the same falloff — an ally with no fresh position is scored at the last position they reported, if that was within 20 s (`LOST_ALLY_ANCHOR_MS`; `lastSeen`, the sighting the client sends with its disown), and otherwise stays at 1.0 until found; cross-team peers use the falloff and are omitted entirely beyond the range. With **Voice on camera** on for *both* players, the requester's stored camera is an extra point it listens from — never one it is heard at — so the pair is scored on the closer of champion→champion and camera→champion; with the camera's size known, a peer whose champion is inside the rectangle (300 units of margin) is at 1.0 instead. **Fog of war:** a requester that sent `vis` hears an enemy only if `matchVisibleEnemies` pairs them with one of its icons (nearest first, within 800 units, at most `n` per icon); a stale list means no enemies at all; no list (older clients) means no check. See `server/src/volumes.ts`.
+5. **Camera mode** (`src/services/camera-hearing.ts`) replaces steps 1-4 while it is on and its icons have loaded. Every frame it finds the camera rectangle (`camera-box.ts`: a search for a rectangle of the known size against the white viewport pixels), the champion icons and their team from the ring colour, and whose each icon is (`icon-identity.ts`: correlation against the **base** icons of that team's five champions, fetched at game start by `loadBaseTemplates`). Icons are followed between frames, so a named icon keeps its name under another one, and leftovers are settled by elimination. The players inside the rectangle get 1.0 and everyone else 0 — teammates and enemies alike, and enemies only while drawn. The client disowns its coordinates (`stale: true`) and makes no `/compute-volumes` call meanwhile; until its icons are in, or if they fail to load, proximity runs as above.
 4. **Volumes while lost.** While the tracker cannot place us (scanning, or a hold past `disownAfterSec`) the coordinates are disowned and cross-team peers stop hearing us. With ally proximity on, for the first 20 s (`LOST_ALLY_ANCHOR_MS` in `orchestrator.ts`) the client goes on asking `/compute-volumes` from where it was last *seen* (`getLastSeenPosition`: not extrapolated, not a teammate cover; cleared by RESET, death, respawn and a minimap region change), with `alliesOnly: true` — the server scores only its teammates and leaves everyone else out, and the client drops anyone else in the answer as well. After that, with ally proximity off, or with no last-seen position, every teammate is at 1.0 and nobody else is heard, as before v0.5.23. The disown (`coords` with `stale: true`) carries that same sighting, `seen: true` and its age (`seenAgoMs`), and is sent again whenever the sighting changes or is dropped; the server keeps it as `lastSeen` only while the latest disown carries one, so teammates score the player where their own client does, and a RESET or respawn takes it back on both sides. Clients before v0.5.23 never send it, and their teammates hear them at 1.0 while they are lost, as before. Going straight to 1.0 made a lane crowded with icons — where trackers lose players often — sound like the whole team, all game.
 
 On a map the client has no coordinate system for, none of the three steps above happen: tracking never starts, no `coords` are sent, and every peer is held at 1.0 — voice works, proximity is off, and the panel says why. Coordinates are only ever broadcast for a map whose dimensions the client actually knows (`src/core/map-detect.ts`).
@@ -130,8 +135,9 @@ Voice is the only thing on the WebRTC connection — there is no data channel.
 
 - Each client publishes a single mic stream through a WebAudio graph: `mic → GainNode → MediaStreamDestination → RTCPeerConnection`.
 - Each peer's incoming stream goes through the inverse: `RTCPeerConnection → MediaStreamSource → GainNode → AudioContext.destination`.
-- The per-peer gain is driven by the server-returned volume, smoothed (`nextSmoothedVolume`, ~1-second ramp) so distance changes ease in instead of snapping, and tracking jitter is damped.
-- ICE candidates flow through the signaling server's `/ws` endpoint. Direct P2P (host or srflx) is preferred; TURN relay kicks in if the user opted into "Hide IP" or if direct paths fail. TURN credentials come from Cloudflare's Realtime TURN API, proxied through the signaling server's `/turn-credentials`. The client caches the response in memory for 60 seconds and de-duplicates concurrent requests, so a lobby's worth of peer setups makes one call rather than one per peer. Failed or empty responses are not cached — an ICE server list is frozen into each `RTCPeerConnection` at construction, so caching a STUN-only fallback would strand every peer of that game without a relay.
+- The per-peer gain is driven by the server-returned volume (or camera mode's), smoothed (`nextSmoothedVolume`, ~1-second ramp) so distance changes ease in instead of snapping, and tracking jitter is damped.
+- **App audio** (Settings → "App audio (OBS)", off by default; `src/services/app-audio-output.ts`): WebView2 plays sound from its own `msedgewebview2.exe` process, which OBS's per-application capture cannot pick up. With it on, each peer's stream goes through a per-peer `GainNode` into a graph with no output device, an `AudioWorklet` cuts the mix into 10 ms mono chunks, and `audio_out.rs` plays them on the chosen device from `lolproxchat.exe` itself (cpal/WASAPI). The peer's `<audio>` element keeps playing, muted, because Chromium only pulls a remote track while something plays it. The browser's echo canceller no longer hears that output, so it is meant for headphones.
+- ICE candidates flow through the signaling server's `/ws` endpoint. TURN relay is used if "Hide IP" is on (the default since v0.5.24) or if direct paths fail; with it off, direct P2P (host or srflx) is preferred. TURN credentials come from Cloudflare's Realtime TURN API, proxied through the signaling server's `/turn-credentials`. The client caches the response in memory for 60 seconds and de-duplicates concurrent requests, so a lobby's worth of peer setups makes one call rather than one per peer. Failed or empty responses are not cached — an ICE server list is frozen into each `RTCPeerConnection` at construction, so caching a STUN-only fallback would strand every peer of that game without a relay.
 - ICE failure auto-recovers: initiator side calls `pc.restartIce()` + re-issues an offer, capped at 2 attempts per peer, counter resets on successful re-connect.
 
 ## Signaling server (`server/`)
@@ -193,9 +199,11 @@ Manual checks (Settings → Updates → CHECK) skip the launch delay and the Aut
 | `SignalingService` | WebSocket presence + signal relay. Auto-reconnect with exponential backoff, except on close code 4000 (the room+name was taken over by another connection), which is terminal. |
 | `PeerConnection` | Single peer's `RTCPeerConnection` wrapper. EMA-smoothed gain, periodic `getStats()` logging, ICE-restart on failure, ICE-transport-policy reading from privacy settings. |
 | `VolumeClient` | Calls `/compute-volumes` with `{ myPosition, roomId, name }` and applies the returned per-peer volumes. |
+| `CameraHearing` | Camera mode (`camera-hearing.ts`): from each minimap frame, which players' icons are inside the camera rectangle. Uses `camera-box.ts` (the rectangle) and `icon-identity.ts` (whose icon is whose). (The enemy icons for `vis` come from `TrackingService.getVisibleEnemies`, in proximity mode.) |
+| `AppAudioOutput` | App audio (`app-audio-output.ts`): mixes the peers in Web Audio and streams the mix to `audio_out.rs`. |
 | `GameStateService` | Wraps Tauri commands for LCU + Live Client Data into a TypeScript surface. |
 | `Devices` | localStorage-backed input/output audio device pick. |
-| `Privacy` | localStorage-backed Force-TURN toggle. |
+| `Privacy` | localStorage-backed Force-TURN toggle (on unless stored `'0'`). |
 | `Updater` | Thin wrapper over the Rust update commands. |
 
 ### Internal helpers and shared types
@@ -234,6 +242,8 @@ See [`CONTRIBUTING.md`](../CONTRIBUTING.md) § "Testing" for what each suite cov
 | `main::set_panel_size` | Reports the panel's current hit-rect size to the click-through polling loop. |
 | `main::append_log`, `main::append_log_lines` | Writes to the rolling debug log file. The frontend buffers console output and calls `append_log_lines`, which takes one lock and one flush per batch; the single-line `append_log` stays registered for version skew between the bundle and the binary. |
 | `main::open_log_folder` | Launches Explorer at the log directory. |
+| `main::position_speakers`, `main::hide_speakers` | Place the speakers window over the game window, or hide it. It is made a tool window (`make_tool_window`, as the scanner is) so Alt-Tab and OBS's window lists leave it out. |
+| `audio_out::audio_out_devices`, `audio_out_start`, `audio_out_push`, `audio_out_stop`, `audio_out_status` | App audio: list output devices, open one with cpal, take 10 ms f32 chunks over raw IPC into a small ring buffer, and report buffer and underrun counts. |
 
 `main.rs` also runs the cursor-position polling loop (30 Hz, skipped while LMB held to avoid tearing down a native window-drag), installs the low-level keyboard hook for the rebindable push-to-talk and toggle-mute keys (push-to-talk defaults to the key left of 1 on the current layout, scan code 0x29, and is only watched while the input mode is Push to Talk — `set_ptt_active`), runs the Debug per-game bundles (`game_bundle.rs`: the game's log lines are teed into `games/.inprogress-<lobby>_<start>/` along with minimap snapshots and classifier crops from `src/services/debug-bundle.ts`, zipped at game end or at the next launch, newest 20 kept), grants every window's WebView2 microphone access (`mic_permission.rs`: answers the permission prompt itself and overwrites a remembered Block — the app only loads its own pages), opens the rolling log file at startup with 3-session rotation, and routes `tauri::WindowEvent::CloseRequested` on any window to `app.exit(0)`.
 

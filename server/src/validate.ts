@@ -22,6 +22,16 @@ const CONTROL_CHARS_RE = /[\x00-\x1F\x7F-\x9F]/;
 // A camera box can never be bigger than the map (~15000 units on Summoner's
 // Rift); anything past this is garbage, not a camera.
 export const MAX_CAMERA_SPAN = 20_000;
+// The largest box a real screen draws. League's camera zoom is fixed, so the
+// box is a fixed share of the minimap: 85/341 x 47/341 of it at 16:9 (the
+// 2026-10-12 recordings), ~3700 x 2070 units on Summoner's Rift; a 21:9
+// ultrawide draws it ~4900 wide, the same height. A bigger box is clamped to
+// these: everyone inside the box is heard at full volume (with both players'
+// voice on camera on), so an unbounded one would let a modified client hear
+// every such enemy on the map at once. A wider screen still than 21:9 hears a
+// little less than it sees, not nothing.
+export const MAX_CAMERA_WIDTH = 5_000;
+export const MAX_CAMERA_HEIGHT = 2_400;
 // Five enemies, so five icons; a few spare for a sighting held across a frame.
 export const MAX_VISIBLE_ICONS = 10;
 // Champions one red blob can stand for (icons merge when enemies stand
@@ -29,14 +39,17 @@ export const MAX_VISIBLE_ICONS = 10;
 export const MAX_ICON_COUNT = 5;
 
 /**
- * The camera box size off a `coords` message (cw, ch), or undefined when it
+ * The camera box size off a `coords` message (cw, ch), clamped to what a real
+ * screen draws (MAX_CAMERA_WIDTH x MAX_CAMERA_HEIGHT), or undefined when it
  * carries none or a malformed one — which leaves the camera scored by its
  * centre, as for an older client.
  */
 export function parseCameraSize(cw: unknown, ch: unknown): { w: number; h: number } | undefined {
   const span = (v: unknown): v is number =>
     typeof v === 'number' && isFinite(v) && v > 0 && v <= MAX_CAMERA_SPAN;
-  return span(cw) && span(ch) ? { w: cw, h: ch } : undefined;
+  return span(cw) && span(ch)
+    ? { w: Math.min(cw, MAX_CAMERA_WIDTH), h: Math.min(ch, MAX_CAMERA_HEIGHT) }
+    : undefined;
 }
 
 /**

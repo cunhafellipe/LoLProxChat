@@ -283,6 +283,23 @@ describe('tiered proximity — end-to-end against the real server', () => {
     me.close(); near.close(); seen.close(); hidden.close();
   });
 
+  it('a camera box claiming the whole map is clamped to a screen\'s worth', async () => {
+    // Everyone inside the box is heard at full volume (both players with voice
+    // on camera on), so the box's size is capped server-side: a modified
+    // client cannot listen to the whole map by claiming a huge one.
+    const room = 'r-bigbox';
+    const me = await joinRoom(room, 'BoxMe', 'ORDER');
+    const onScreen = await joinRoom(room, 'BoxOnScreen', 'CHAOS');
+    const farAway = await joinRoom(room, 'BoxFar', 'CHAOS');
+    sendCoordsWithCamera(onScreen, 7500, 7000, 7500, 7000);
+    sendCoordsWithCamera(farAway, 13000, 13000, 13000, 13000);
+    me.send(JSON.stringify({ type: 'coords', x: 0, y: 0, cx: 7000, cy: 7000, cw: 15000, ch: 15000 }));
+    await sleep(400);
+    const result = await computeVolumes({ x: 0, y: 0 }, room, 'BoxMe');
+    expect(result.peerVolumes).toEqual({ BoxOnScreen: 1.0 });
+    me.close(); onScreen.close(); farAway.close();
+  });
+
   it('a listenPosition in the request buys nothing (#36)', async () => {
     // The pre-v0.5.9 wire field. Honouring it would let a client listen in on
     // a player who never turned the feature on; the published camera is what

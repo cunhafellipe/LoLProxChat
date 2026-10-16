@@ -84,6 +84,26 @@ The client-side remnant of this idea — a peer-avoidance penalty in the tracker
 - A modified client can of course publish a false camera, and listen from anywhere against players who have opted in — which is no more than an honest client with the setting on can do by panning. It still cannot reach a peer who published none.
 - The team filter and `MAX_HEARING_RANGE` cutoff still apply from every point — the server remains the authority for both.
 
+### Voice reaches every peer; the volume is applied by the listener
+
+- Each client sends its microphone to every peer in the room over WebRTC, and each listener's own client sets how loud each peer plays. The server's volumes (and camera mode's choices, below) are what an **unmodified** client applies; nothing stops a modified one from playing every peer at full volume.
+- That was already true before v0.5.24 and is not new with camera mode. What the server's scoring withholds is the *volume vector*, so an unmodified client never hears an enemy out of range or out of sight; a modified client hears what everyone says, but learns nothing about where they are from it beyond what their words say.
+- Making it enforceable would mean routing audio through a server that mixes it per listener (an SFU/MCU), which moves every voice stream through infrastructure we run and pay for. Not planned.
+
+### Camera mode is decided by the client (on by default since v0.5.24)
+
+- In camera mode a client hears the players whose minimap icons are inside its camera rectangle, enemies only while their icon is drawn, and no one else. The decision is made locally, from the client's own capture; the client sends the server no position and asks it for no volumes while the mode is on (it disowns its coordinates, as when tracking is lost).
+- **What it reveals:** nothing the screen does not show. Every player it lets you hear has an icon in your view right now, and enemies in the fog have none. It is not mutual — a player in camera mode hears whoever is on their screen whatever that player's own settings — because the bound is the screen and the fog of war, not consent. See [`compliance.md`](compliance.md) § "Camera mode".
+- **What a modified client gains:** nothing beyond the section above. Camera mode adds no server data path, so there is nothing new to forge.
+- **Its effect on the server's data:** a camera-mode client contributes no position, so proximity clients cannot score it (enemies on proximity hear it at 0, teammates at the unplaced-ally 1.0), and the server holds less about it than about a proximity client.
+
+### Fog of war on the server: `vis`, and the camera box
+
+- Since v0.5.24 a proximity client sends, with each `coords` report, the positions of the enemy icons its own minimap is drawing (`vis`: at most 10 `[x, y]` entries, or `[x, y, n]` for merged icons; `MAX_VISIBLE_ICONS` in `server/src/validate.ts`). The server pairs each with the nearest enemies (`matchVisibleEnemies`, within 800 units, at most `n` per icon, closest first) and leaves every other enemy out of that client's volumes. A stale list counts as seeing nobody (fail closed). A client that sends no list at all (older versions) is scored without the check, as before.
+- **It is a one-sided limit.** A modified client can omit `vis` and be scored like an older one, or send icons wherever it likes and hear any enemy within the usual range of itself — which an honest older client already has. It cannot hear an enemy *further* than before: `vis` only removes enemies, it never adds one.
+- **What it adds to what the server holds:** the positions of enemy icons, which include enemies not running the app. The server never sends them on, keeps only the latest list per client in memory, and drops it on disconnect, like `coords`. An operator reading memory learns where a player's team saw enemies — little more than they learn from the positions already there.
+- **The camera box** (`cw`/`ch`, sent with voice on camera's centre): between two players who both have voice on camera on, the server hears the peers inside the requester's camera rectangle at full volume. The server caps the size at **5000 × 2400 game units** (`MAX_CAMERA_WIDTH`/`MAX_CAMERA_HEIGHT` in `server/src/validate.ts`) — a 21:9 screen's rectangle, more than a 16:9 one's ~3700 × 2070 — so a client claiming a map-sized box hears only a screen's worth around its camera centre. Enemies still have to pass the `vis` check.
+
 ### The server operator can read positions
 
 - The server holds every connected client's plaintext XY in process memory for as long as they're in a room. A malicious operator running the signaling server can log the positions of every player in every game using their server.
@@ -91,7 +111,7 @@ The client-side remnant of this idea — a peer-avoidance penalty in the tracker
 
 ## Calibration of `MAX_HEARING_RANGE`
 
-The 1350-game-unit hearing range was chosen to roughly match the radius at which a player would already gain visual information about an enemy in stock LoL (champion vision range). The intent is that a stock client doesn't expose information the player wouldn't have anyway — the audio "fades in" right around when the enemy would become visible or warded. (A possible follow-up would gate cross-team audio on actual line-of-sight — only channel an enemy if a teammate has unobstructed vision of them — by testing champion positions against a static Summoner's Rift vision mesh (brush + walls) server-side. Positions alone don't suffice: hearing range ≈ sight range, so every audible enemy is already within the sight *radius*; the residual leak is terrain occlusion (a gank from a brush, an enemy behind a wall), which needs the mesh to detect. Server-side keeps it un-bypassable (the server withholds the audio), but it would model champion vision only — not wards — and is a non-trivial build.)
+The 1350-game-unit hearing range was chosen to roughly match the radius at which a player would already gain visual information about an enemy in stock LoL (champion vision range). The intent is that a stock client doesn't expose information the player wouldn't have anyway — the audio "fades in" right around when the enemy would become visible or warded. (A possible follow-up would gate cross-team audio on actual line-of-sight — only channel an enemy if a teammate has unobstructed vision of them — by testing champion positions against a static Summoner's Rift vision mesh (brush + walls) server-side. Positions alone don't suffice: hearing range ≈ sight range, so every audible enemy is already within the sight *radius*; the residual leak is terrain occlusion (a gank from a brush, an enemy behind a wall), which needs the mesh to detect. Server-side keeps it out of the volume vector an unmodified client applies (see "Voice reaches every peer" above), but it would model champion vision only — not wards — and is a non-trivial build.)
 
 If this range is increased, the side-channel value to a modified client grows. If decreased, the proximity-audio experience loses utility (you can only hear teammates in melee range of each other). The current value is the result of those competing pressures.
 
@@ -106,7 +126,10 @@ The calibration argument is map-specific: it compares a distance in Summoner's R
 | WebSocket heartbeat (30 s ping, one missed pong) | **Applied** | Terminates a half-open connection within ~60 s, removing that player from room state. This is the liveness guarantee for allies, who skip the stale-position window because ally voice is global. |
 | Hearing range ≈ champion vision range | **Applied** | `MAX_HEARING_RANGE` is sized so audio only reveals enemies a stock client would roughly already sense. |
 | Proximity disabled on maps with no known coordinate system | **Applied** | Unrecognised maps used to fall back to Summoner's Rift dimensions, producing hearing distances unrelated to in-game distance. No coordinates are broadcast on such a map at all. |
-| Line-of-sight gate on cross-team audio | Possible (benched) | Only channel an enemy a teammate can actually see, checked server-side against a static map vision mesh. See "Calibration of `MAX_HEARING_RANGE`" above. |
+| Fog-of-war gate on cross-team audio (`vis`) | **Applied** (v0.5.24) | An enemy is scored only when matched to an icon on the requester's own minimap, which the game draws only while their team has vision — brush, terrain and wards included. Fail closed on a stale list; clients that send none are scored as before. See "Fog of war on the server" above. |
+| Camera box size cap | **Applied** (v0.5.24) | The camera box is clamped to 5000 × 2400 game units, a 21:9 screen's view, so a modified client cannot claim the whole map. |
+| Line-of-sight gate against a static vision mesh | Not applied | Superseded by the minimap gate above, which also covers wards. |
+| Server-mixed audio (SFU/MCU) | Not applied | The only way to make the volume vector binding on a modified client. Moves all voice through our infrastructure. |
 | Drop volumes below a noise floor | Not applied | Would prevent "barely audible = exactly N units away" signaling |
 | Snap positions to a coarse grid client-side | Not applied | Lossy at source; slightly degrades volume accuracy for legitimate users. Would also reduce what a compromised server can see. |
 | Reduce `MAX_HEARING_RANGE` | Not applied | Would shrink the side channel proportionally but also shrink the proximity-audio feature itself |
@@ -129,12 +152,12 @@ The only data that ever leaves the user's machine is:
 - **Summoner name** — sent to the signaling server so peers in the same match can find each other in a room. Same name visible to anyone on the match scoreboard.
 - **XY position coordinates** — sent in plaintext over the WebSocket (`coords` message) so the server can compute proximity volumes against the room's other players. Held only in process memory, never logged or persisted, replaced on every ~100 ms tick, dropped on disconnect. Only the server ever sees them (see "Server operator can read all positions" below).
 - **WebRTC signaling messages** (SDP offers/answers, ICE candidates) — exchanged peer-to-peer via the signaling server as a relay. Standard WebRTC handshake; contains your public IP unless `Hide IP (Force TURN)` is enabled (see below).
-- **Icon file requests to Community Dragon** (`raw.communitydragon.org`, behind Cloudflare) — at the start of a game the app downloads the minimap icons of the skins you and your teammates have on, to tell your icon from theirs (`src/services/skin-matcher.ts`). It does so only when League reports the skin of every player on your team; otherwise nothing is fetched. What the requests carry:
+- **Icon file requests to Community Dragon** (`raw.communitydragon.org`, behind Cloudflare) — at the start of a game the app downloads minimap icons (`src/services/skin-matcher.ts`): the **base** icons of all ten champions in the game, for camera mode, every game; and the icons of the skins you and your teammates have on, to tell your icon from theirs, when League reports the skin of every player on your team. The speakers overlay (since v0.5.24) also loads the speaking players' icons from Community Dragon by URL; those are usually served from the browser cache the downloads just filled. What the requests carry:
   - **The file paths**, like `characters/kayn/hud/kayn_circle_15.png`, plus each champion's folder listing. No game ID, summoner name or room is in them.
   - **The usual browser headers** WebView2 adds to any request: its User-Agent and `sec-ch-ua*` hints (Windows and WebView2 versions), `Accept-Language`, and `Origin: http://tauri.localhost`, which marks the request as coming from a Tauri app. No cookies are sent and no referrer.
   - **Your IP address**, as with any web request.
 
-  Taken together, the burst of requests at the start of a game says to Community Dragon and Cloudflare: *someone at this IP, in a Tauri app, has just started a game with these champions in these skins on their team.* That is not your identity, but it is a fingerprint of your team that could be matched against a match history by someone with both. Icons are cached on disk and fetched again only after a month (a champion's file listing after a week), so a repeat of a champion and skin you have already seen makes no request, and many games make none at all. Each download gives up after 10 seconds, and all of them are cancelled when the game ends.
+  Taken together, the burst of requests at the start of a game says to Community Dragon and Cloudflare: *someone at this IP, in a Tauri app, has just started a game with these ten champions, and these skins on their team.* That is not your identity, but it is a fingerprint of your team that could be matched against a match history by someone with both. Icons are cached on disk and fetched again only after a month (a champion's file listing after a week), so a repeat of a champion and skin you have already seen makes no request, and many games make none at all. Each download gives up after 10 seconds, and all of them are cancelled when the game ends.
 - **Voice audio** — flows peer-to-peer over DTLS-SRTP, never touches the signaling server. Goes through the TURN relay (Cloudflare) only if direct P2P fails or `Hide IP (Force TURN)` is on, and even then the relay can't decrypt it.
 
 The only data persisted locally is:
@@ -149,14 +172,13 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 
 **Risk:** WebRTC peer connections exchange ICE candidates to figure out how to reach each other. The "server-reflexive" (srflx) candidate contains each player's public IP, and that candidate is signaled to every peer in the match. A malicious player in the lobby can extract everyone else's public IP. With it, they can launch a DDoS against the home network, attempt port scanning, etc. This is the same class of risk Discord had pre-2017 before they forced all voice through their relays.
 
-**Status:** **Mitigated by opt-in toggle.**
+**Status:** **Mitigated, on by default since v0.5.24.**
 
 - **Settings → Hide IP (Force TURN)** sets `iceTransportPolicy: 'relay'` on the RTCPeerConnection. Chromium then refuses to gather or use any non-relay candidate, so peers only ever see the TURN server's IP, never the user's public IP.
-- Default is **off**, because TURN relay adds ~20-100 ms latency and uses TURN bandwidth (which we pay for via the Cloudflare free tier). Most users on default config still expose their IP to fellow players.
+- Default is **on** since v0.5.24 (it was off before). TURN relay adds ~20-100 ms latency and uses TURN bandwidth (Cloudflare's free tier), which was the reason it started off. Older versions stored nothing while it was off, so **updating turns it on for everyone**, including players who had it off; from v0.5.24 turning it off is stored and sticks.
 - Takes effect on the next peer connection (existing connections keep their original transport policy until re-established).
 - Only matters in matches where you don't already trust everyone. If you're queuing with a premade of friends, they're not the threat — but the other 8 players in the match could be, and the toggle is what protects you from them.
-
-**Server-side mitigation alternative (not chosen):** forcing all clients TURN-only by default would protect users transparently but multiply server-side bandwidth costs and add latency for everyone. Opt-in keeps the cost on the users who choose it.
+- The protection is the client's own: with it off, your IP is exposed even to peers who have it on (they connect to your relay candidates only, but you gather and signal host and srflx candidates). The server does not force it.
 
 ## Server operator can read all positions
 

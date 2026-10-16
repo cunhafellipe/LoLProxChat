@@ -404,8 +404,9 @@ export function closestApproach(
  * volume out to MAX_HEARING_RANGE (≈ a champion's vision range): they fade
  * in very faintly as they enter that radius and grow louder as they close.
  * Out-of-range peers are absent from the response entirely (the server
- * simply doesn't tell the requester they exist — a modified client cannot
- * bypass the cutoff to hear distant enemies).
+ * simply doesn't tell the requester they exist). Voice itself reaches every
+ * peer and is set by the listener, so this binds unmodified clients; a
+ * modified one can play everyone, but learns no distances from it.
  *
  * When the requester has no team set (legacy v0.2 client), every peer goes
  * through the same distance falloff (team-blind).

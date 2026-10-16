@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   validateJoin, MAX_NAME_LEN, parseCameraSize, parseVisibleIcons, MAX_CAMERA_SPAN, MAX_VISIBLE_ICONS,
+  MAX_CAMERA_WIDTH, MAX_CAMERA_HEIGHT,
 } from '../src/validate.js';
 
 describe('parseCameraSize', () => {
@@ -15,6 +16,13 @@ describe('parseCameraSize', () => {
     expect(parseCameraSize(-5, 1350)).toBeUndefined();
     expect(parseCameraSize(Infinity, 1350)).toBeUndefined();
     expect(parseCameraSize(MAX_CAMERA_SPAN + 1, 1350)).toBeUndefined();
+  });
+  it('fits a 16:9 and a 21:9 screen\'s box, and clamps anything bigger to them', () => {
+    // 85/341 x 47/341 of Summoner's Rift (14870 x 14980), and 21:9's width.
+    expect(parseCameraSize(3707, 2065)).toEqual({ w: 3707, h: 2065 });
+    expect(parseCameraSize(4865, 2065)).toEqual({ w: 4865, h: 2065 });
+    // A modified client claiming the whole map gets a screen's worth.
+    expect(parseCameraSize(15000, 15000)).toEqual({ w: MAX_CAMERA_WIDTH, h: MAX_CAMERA_HEIGHT });
   });
 });
 

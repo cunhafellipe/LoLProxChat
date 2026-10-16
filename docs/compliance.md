@@ -20,7 +20,7 @@ LoLProxChat is built to stay within the categories Riot Games explicitly publish
 - ❌ No automation, scripting, or bot behavior — the app never takes any in-game action on your behalf.
 - ❌ No decision-making aids — no enemy ult timers, no warned-by, no jungle timers, no skill suggestions.
 - ❌ No warded-by indicators, no enemy item builds, no spectator-mode data.
-- ⚠️ **Proximity audio does not respect fog of war.** Hearing is computed from distance alone, so an enemy in a brush or behind a wall is as audible as one standing in the open at the same range. While dead you stay audible, and can hear, at your body. The "Voice on camera" setting widens that further, though only between two players who both have it on — and since v0.5.18 it is on by default. All three are covered below — this is the app's one real departure from "no exposure of obfuscated information", and it is stated here rather than buried.
+- ⚠️ **Fog of war is respected only as far as the minimap shows it.** Since v0.5.24 the app hears an enemy only while their icon is drawn on your own minimap — which the game draws only for enemies your team can see — so an enemy in a brush or in the fog is silent. That holds for players on v0.5.24 or later; with older versions in the game, hearing between them is still decided by distance alone, brush or not. While dead you stay audible, and can hear, at your body. **Camera mode** (on by default since v0.5.24) lets you hear the players on your screen at any distance, and **Voice on camera** widens proximity hearing to your camera's view between players who both have it on. All of this is covered below — it is the app's one real departure from "no exposure of obfuscated information", and it is stated here rather than buried.
 - ❌ No in-game advertising (banned by Riot in May 2025).
 - ❌ No paid tier or freemium gating — Riot's monetization rules require a free tier; LoLProxChat is fully open source and free.
 
@@ -34,13 +34,19 @@ The app does not reveal *where* an enemy is — only that one is somewhere withi
 
 ### Fog of war, stated plainly
 
-The paragraph above is the argument for why the hearing radius is set where it is. It is an argument about *distance*, and distance is not what the game actually uses to decide what you may know about. League gates that on **vision**, and vision is blocked by brush and terrain. This app cannot see any of that.
+The paragraph above is the argument for why the hearing radius is set where it is. It is an argument about *distance*, and distance is not what the game actually uses to decide what you may know about. League gates that on **vision**, and vision is blocked by brush and terrain.
 
-So an enemy sitting in a lane brush eight hundred units away is audible at full volume, and an enemy behind a wall is too. A player testing the app described this as fog of war being broken, which is a fair description of the experience.
+Up to v0.5.23 the app could not see any of that: an enemy sitting in a lane brush eight hundred units away was audible at full volume, and one behind a wall was too. A player testing the app described this as fog of war being broken, which was a fair description. The Live Client Data API reports positions and roster, and nothing about what any player can currently see.
 
-It is not a bug that can be fixed at this layer. The Live Client Data API reports positions and roster, and reports nothing about what any player can currently see — no vision state, no brush occupancy, no ward coverage. Without that, the only way to model vision would be to ship a static Summoner's Rift brush-and-wall mesh and test line of sight against it server-side, which is sketched in [`threat-model.md`](threat-model.md) under the `MAX_HEARING_RANGE` calibration. That would cover terrain but still not wards, and it is a substantial build. It is not implemented, and so is not claimed.
+**Since v0.5.24 the minimap answers it.** League draws an enemy's icon on your minimap exactly while your team has vision of them — champions, wards and all — so the app reads which enemy icons your minimap is drawing, off the same capture as everything else, and an enemy is audible to you only while one of those icons is theirs. In proximity mode your client sends the icons' positions to the server, which pairs each with the nearest enemies (at most as many as the icon holds, when icons merge) and leaves every other enemy out of your volumes; in camera mode (below) your own client only ever hears icons it sees. A brush, a wall or the fog makes an enemy silent, and walking out of it makes them audible again, as the game would show them.
 
-What bounds the leak today is the hearing radius and nothing else: you learn that *an* enemy is within roughly vision range of you, not which one, not where, and not through any mechanism you could aim. Players who do not want that should not run the app, and anyone running it in a competitive context should understand it is what they are opting into.
+What it does not cover:
+
+- **Older versions.** A client before v0.5.24 sends no icon list, and the server scores it by distance alone, as before. In a game mixing versions, the fog check applies to what the newer clients hear.
+- **The matching is approximate.** Enemy positions are each player's own minimap tracking, so an enemy is matched to an icon within ~800 units of where their app says they are; one their tracker has placed wrongly can be silent while visible.
+- **A modified client can skip it** by sending no list, and is then scored by distance as an older one is. It gains nothing an older version does not have.
+
+What bounds the remaining leak for older clients is the hearing radius: you learn that *an* enemy is within roughly vision range of you, not which one, not where, and not through any mechanism you could aim. Players who do not want even that should not run the app, and anyone running it in a competitive context should understand it is what they are opting into.
 
 For the precise threat-modeling around how a modified client *could* extract additional information from the volume side channel, see [`threat-model.md`](threat-model.md). Note that the volume value the server returns is **continuous** — the v0.1.26 bucket quantization and jitter were reverted in v0.1.33 because the bucket transitions were audible in real games; the mitigations that remain are the hard cutoff at vision range and the staleness window on peer coordinates.
 
@@ -52,6 +58,20 @@ That is a real widening, and it is stated here because the argument above does n
 
 What bounds it is the same as everything else here: the ~1350-unit hearing radius from a fixed point (the body cannot move), only players running this app, voice and never game audio, and nothing about *which* enemy or exactly where. The alternative — dead players silent to enemies — was considered and set aside because players testing the app expected enemies to keep hearing them while dead; it is a small, contained change around `onDeath` in `src/services/tracking.ts` and the orchestrator's dead-state path if that judgement changes.
 
+## Specifically: "Camera mode" (default ON since v0.5.24)
+
+Contributed in v0.5.24. With camera mode on — the default — you hear **exactly the players whose minimap icons are inside your camera rectangle**, and nobody else: not proximity, not voice on camera, not even a teammate standing beside your champion if your camera is elsewhere. Enemies are heard only while their icon is drawn on your minimap, so the fog of war applies (see above). Each icon is told apart by matching it against the ten players' champion icons from Community Dragon, and followed from frame to frame.
+
+It is decided **on your own PC**, from your own minimap: your client sends the server no position at all while it is on, and asks it for no volumes. That makes it independent of finding your own icon, which is what made proximity fragile.
+
+**How it fits the argument above.** Everyone it lets you hear is on your screen right now: their champion is in your view, visible to you in the game. It reveals nobody the game hides — an enemy in a brush or the fog has no icon on your minimap — and it has no hearing range, because the bound is your screen.
+
+**It is one-way, and it is not mutual.** You hear someone when *their* icon is inside *your* camera box; they hear you when yours is inside theirs. Looking at someone never makes them hear you. But nothing on the other player's side is needed: a player in camera mode hears whoever is on their screen, including a player who has camera mode off, or an older version, and that player cannot opt out of being heard that way except by leaving the game's room. This is a deliberate difference from Voice on camera below, chosen because it is what makes the mode work for everyone at once; the limit is the screen and the fog of war rather than the other player's consent.
+
+**Mixing it with proximity.** A player in camera mode sends no position, so players still on proximity (camera mode off, or an older version) cannot score them: enemies on proximity do not hear them, and teammates on proximity hear them at full team volume, as for any teammate their app cannot place. Everyone in a game should use the same version and mode for it to work both ways.
+
+If you play ranked, consider turning it off: it hears more of the map than plain proximity does.
+
 ## Specifically: "Voice on camera" (mutual, default ON since v0.5.18, one-way)
 
 Added in v0.5.8 for [#36](https://github.com/danthi123/LoLProxChat/issues/36), reworked in v0.5.9. When enabled, you hear the map from **the centre of your in-game camera** as well as from your champion. The camera position is read the same way as everything else — off the minimap, by finding the camera-viewport rectangle the game already draws there.
@@ -62,7 +82,7 @@ Three things bound it.
 
 **1. It only reaches other people running this app, in your room.** It cannot hear anyone who has not installed it and joined the lobby with you, and it carries voice, not game audio.
 
-**2. The range cutoff is unchanged.** `MAX_HEARING_RANGE` still applies, measured from the camera. Panning does not let you hear further, only from somewhere else.
+**2. It reaches what is on your screen and no further.** Since v0.5.24 your client sends the camera rectangle's size along with its centre, and the server hears through the camera exactly the champions inside that rectangle, at full volume: what you can see on screen. The server caps the size at what a real screen draws (a 21:9 ultrawide's rectangle, ~5000 × 2400 game units on Summoner's Rift), so a client claiming a bigger one gets no more than that. Enemies still have to be drawn on your minimap (the fog check above). Older clients send only the centre, and hear from it with the usual `MAX_HEARING_RANGE`. Voice on camera applies in proximity mode; camera mode replaces it while on.
 
 **3. It only works between two players who have both turned it on, and that is enforced on the server.** Your client publishes your camera centre to the server only while the setting is on (it reads the rectangle either way, to tell which own-team icon is yours — that use never leaves your PC), and the server uses your camera against a player only when *they* have published one too. If you leave it off you publish nothing, nobody else's camera can reach you, and you are heard only by players actually near you on the map — whatever anyone else has chosen. Publishing the camera *is* the opt-in: the server reads your own camera from that published copy when it answers you, and ignores the pre-v0.5.9 `listenPosition` request field, which let a client name a listening point of its own and so skip the opt-in.
 

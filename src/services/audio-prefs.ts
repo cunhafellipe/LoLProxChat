@@ -1,11 +1,10 @@
-// Panel toggles: the "ally proximity" and "voice on camera" audio settings,
-// and shared RESET (bottom of the file). The two audio toggles default ON
-// since v0.5.18, so each is stored explicitly as '1' or '0' and a missing key
-// reads as the default. Before v0.5.18 they defaulted off and "off" was stored
+// Panel toggles: the "ally proximity", "voice on camera" and "camera mode"
+// audio settings, then the two opt-ins, shared RESET and app audio (bottom of
+// the file). The audio toggles default ON (the first two since v0.5.18), so
+// each is stored explicitly as '1' or '0' and a missing key reads as the
+// default; the opt-ins read on only from a stored '1'. Before v0.5.18 they defaulted off and "off" was stored
 // by removing the key, so an install that had turned one off reads as on after
 // the update; there is no way to tell the two apart.
-
-import { setForceTurnRelay } from './privacy';
 
 const ALLY_PROXIMITY_KEY = 'lolproxchat.allyProximity';
 const CAMERA_LISTEN_KEY = 'lolproxchat.cameraListen';
@@ -30,17 +29,18 @@ export function setAllyProximity(enabled: boolean): void {
   writeToggle(ALLY_PROXIMITY_KEY, enabled);
 }
 
-// Put every panel toggle back to its default (on) once, on the first launch of
-// a build that carries this. A 2026-10-08 test had a player hear their ally at
+// Put both toggles back to their defaults (on) once, on the first launch of a
+// build that carries this. A 2026-10-08 test had a player hear their ally at
 // full volume across the map for a whole game — what Ally proximity off does —
 // so every tester starts the next version from the same, known settings rather
 // than whatever an earlier version, or an earlier stray click, left stored.
 // Anyone who wants one off turns it off again, and it then stays off: this runs
-// once per install, not per launch. Version 2 (2026-10-16) adds the toggles
-// that became default-on then: Camera mode, Shared RESET, App audio and Hide
-// IP (privacy.ts).
+// once per install, not per launch. Shared RESET is left alone — it is an
+// opt-in, so its default is off, and a reset could only ever take it away.
+// Nor is anything added since: Camera mode reads as on until it is turned off
+// (a missing key is on), and App audio is off until it is turned on.
 const AUDIO_DEFAULTS_KEY = 'lolproxchat.audioDefaultsApplied';
-const AUDIO_DEFAULTS_VERSION = '2';
+const AUDIO_DEFAULTS_VERSION = '1';
 
 /** Returns whether it changed anything this time. Never throws. */
 export function applyAudioDefaultsOnce(): boolean {
@@ -48,10 +48,6 @@ export function applyAudioDefaultsOnce(): boolean {
     if (localStorage.getItem(AUDIO_DEFAULTS_KEY) === AUDIO_DEFAULTS_VERSION) return false;
     writeToggle(ALLY_PROXIMITY_KEY, true);
     writeToggle(CAMERA_LISTEN_KEY, true);
-    writeToggle(CAMERA_ONLY_KEY, true);
-    writeToggle(SHARED_RESET_KEY, true);
-    writeToggle(APP_AUDIO_KEY, true);
-    setForceTurnRelay(true);
     localStorage.setItem(AUDIO_DEFAULTS_KEY, AUDIO_DEFAULTS_VERSION);
     return true;
   } catch {
@@ -103,8 +99,10 @@ export function setCameraOnly(enabled: boolean): void {
 
 // Shared RESET: pressing RESET also asks everyone else in the game to re-find
 // their own icon, and their RESETs re-find ours — but only between players who
-// have all turned this on. On by default since 2026-10-16, stored like the
-// toggles above: a missing or unreadable key is on.
+// have all turned this on. Off by default and stored as '1' only, unlike the
+// toggles above: a missing or unreadable key is off. It makes other players'
+// apps act on a message, so it is something each player opts in to — see
+// docs/threat-model.md, "Shared RESET".
 //
 // With it off the client tells the server so on join, the server sends it no
 // shared RESET at all, and a 'reset' that arrives anyway (an older or
@@ -113,9 +111,9 @@ const SHARED_RESET_KEY = 'lolproxchat.sharedReset';
 
 export function getSharedReset(): boolean {
   try {
-    return readToggle(SHARED_RESET_KEY);
+    return localStorage.getItem(SHARED_RESET_KEY) === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -124,19 +122,20 @@ export function setSharedReset(enabled: boolean): void {
 }
 
 // App audio (app-audio-output.ts): voices played by lolproxchat.exe itself, so OBS's
-// Application Audio Capture can take them on their own track. On by default
-// since 2026-10-16, stored like the toggles above (a missing key is on). With
-// speakers it can bring echo back (the browser's echo canceller no longer
-// hears what is played): speaker users turn it off. Its device is the Rust side's own list (a device name, not a
-// browser device id); missing means the Windows default.
+// Application Audio Capture can take them on their own track. Off by default
+// and stored as '1' only (a missing or unreadable key is off): with speakers it
+// brings echo back, since the browser's echo canceller no longer hears what is
+// played, so it is for streamers on headphones who turn it on. Its device is
+// the Rust side's own list (a device name, not a browser device id); missing
+// means the Windows default.
 const APP_AUDIO_KEY = 'lolproxchat.appAudio';
 const APP_AUDIO_DEVICE_KEY = 'lolproxchat.appAudioDevice';
 
 export function getAppAudio(): boolean {
   try {
-    return readToggle(APP_AUDIO_KEY);
+    return localStorage.getItem(APP_AUDIO_KEY) === '1';
   } catch {
-    return true;
+    return false;
   }
 }
 
