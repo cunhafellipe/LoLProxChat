@@ -300,10 +300,61 @@ export interface TieredRoomClient {
   name: string;
   team?: 'ORDER' | 'CHAOS';
   position?: { x: number; y: number; updatedMs: number };
-  /** Camera centre, present only while the client has voice on camera ON. */
-  camera?: { x: number; y: number; updatedMs: number };
+  /** Camera centre, present only while the client has voice on camera ON;
+   *  `w`/`h` when the client sent the camera box's size. */
+  camera?: { x: number; y: number; w?: number; h?: number; updatedMs: number };
+  /** Enemy icons the client's minimap draws; absent for older clients. */
+  visible?: { icons: { x: number; y: number; n: number }[]; updatedMs: number };
   /** The position it reported before disowning it (RoomManager.clearPosition). */
   lastSeen?: { x: number; y: number; updatedMs: number };
+}
+
+// Camera box: a champion counts as inside it when its centre is within this
+// many units of the box. The icon is ~1300 units across, so one whose centre
+// sits just past the edge is still half on screen.
+const CAMERA_BOX_MARGIN = 300;
+// How close an enemy's reported position must be to an icon on the
+// requester's minimap to be that icon: about an icon's radius plus what a
+// champion walks between two reports.
+const VISIBLE_MATCH_RANGE = 800;
+
+/** Whether `p` lies inside the camera box (centre x,y, size w,h), with margin. */
+export function insideCameraBox(
+  p: { x: number; y: number },
+  box: { x: number; y: number; w: number; h: number },
+  margin = CAMERA_BOX_MARGIN,
+): boolean {
+  return Math.abs(p.x - box.x) <= box.w / 2 + margin &&
+    Math.abs(p.y - box.y) <= box.h / 2 + margin;
+}
+
+/**
+ * Which enemies the requester's visible icons belong to. Each icon stands for
+ * at most `n` enemies (n > 1 when icons merged) — the closest ones, closest
+ * pairs first — so one drawn icon cannot make an enemy hiding in the brush
+ * beside it audible along with the one actually drawn.
+ */
+export function matchVisibleEnemies(
+  enemies: readonly { name: string; position: { x: number; y: number } }[],
+  icons: readonly { x: number; y: number; n: number }[],
+  range = VISIBLE_MATCH_RANGE,
+): Set<string> {
+  const seen = new Set<string>();
+  const pairs: { icon: number; name: string; d: number }[] = [];
+  icons.forEach((v, icon) => {
+    for (const e of enemies) {
+      const d = Math.hypot(v.x - e.position.x, v.y - e.position.y);
+      if (d <= range) pairs.push({ icon, name: e.name, d });
+    }
+  });
+  pairs.sort((a, b) => a.d - b.d);
+  const left = icons.map(v => v.n);
+  for (const p of pairs) {
+    if (left[p.icon] <= 0 || seen.has(p.name)) continue;
+    left[p.icon]--;
+    seen.add(p.name);
+  }
+  return seen;
 }
 
 /**
@@ -396,6 +447,21 @@ export function computeTieredVolumes(
   const peerVolumes: Record<string, number> = {};
   const trace: string[] = [];
 
+  // Fog of war. A client that reports which enemy icons its minimap draws
+  // hears a cross-team peer only when one of those icons is theirs — by
+  // distance or through the camera alike. Decided once for the room so each
+  // icon is spent on as many enemies as it holds, closest first. A stale list
+  // counts as seeing nobody (fail closed); a client that never sends one (an
+  // older build) is scored without the check, as before.
+  const myIcons = me.visible ? (me.visible.updatedMs >= cutoff ? me.visible.icons : []) : undefined;
+  const seenEnemies = myIcons
+    ? matchVisibleEnemies(
+        clients.flatMap(c => c.name !== me.name && (legacy || c.team !== me.team) &&
+          c.position && c.position.updatedMs >= cutoff ? [{ name: c.name, position: c.position }] : []),
+        myIcons,
+      )
+    : null;
+
   for (const peer of clients) {
     if (peer.name === me.name) continue;
 
@@ -466,16 +532,35 @@ export function computeTieredVolumes(
     // listening point of its own (the old `listenPosition` field is ignored).
     const bothOptedIn = !!myCamera && !!peer.camera &&
       peer.camera.updatedMs >= cutoff;
-    const myPoints = bothOptedIn ? [body.myPosition, myCamera!] : [body.myPosition];
-    const peerPoints = [peerPos];
 
-    const dist = closestApproach(myPoints, peerPoints);
-    if (dist >= range) {
-      if (DEBUG_VOLUMES) trace.push(peer.name + '[' + tag + ' dist=' + Math.round(dist) + ' >= range=' + range + ']=skip');
+    // An enemy our minimap does not draw is hidden from us by the fog of war
+    // (a brush, no vision): not audible, however close.
+    if (!ally && seenEnemies && !seenEnemies.has(peer.name)) {
+      if (DEBUG_VOLUMES) trace.push(peer.name + '[' + tag + ' NOT-VISIBLE]=skip');
       continue;
     }
-    peerVolumes[peer.name] = calculateVolume(dist);
-    if (DEBUG_VOLUMES) trace.push(peer.name + '[' + tag + (bothOptedIn ? ' camera' : '') + ' dist=' + Math.round(dist) + ']=' + calculateVolume(dist).toFixed(2));
+
+    // Camera BOX (clients that send its size): a peer whose champion is inside
+    // the rectangle on the requester's screen is heard at full volume. It
+    // replaces the centre-plus-range test for these clients; an enemy still
+    // has to pass the visibility check above, so the camera reaches only what
+    // is already on screen.
+    const box = bothOptedIn && myCamera!.w !== undefined && myCamera!.h !== undefined
+      ? { x: myCamera!.x, y: myCamera!.y, w: myCamera!.w, h: myCamera!.h }
+      : null;
+    const onScreen = !!box && insideCameraBox(peerPos, box);
+
+    // Older clients send only the camera centre: listen from it with the
+    // ordinary hearing range, exactly as before.
+    const myPoints = bothOptedIn && !box ? [body.myPosition, myCamera!] : [body.myPosition];
+    const dist = closestApproach(myPoints, [peerPos]);
+    const vol = Math.max(onScreen ? 1.0 : 0, dist < range ? calculateVolume(dist) : 0);
+    if (vol <= 0) {
+      if (DEBUG_VOLUMES) trace.push(peer.name + '[' + tag + ' dist=' + Math.round(dist) + ' >= range=' + range + (box ? ' off-screen' : '') + ']=skip');
+      continue;
+    }
+    peerVolumes[peer.name] = vol;
+    if (DEBUG_VOLUMES) trace.push(peer.name + '[' + tag + (onScreen ? ' on-screen' : bothOptedIn ? ' camera' : '') + ' dist=' + Math.round(dist) + ']=' + vol.toFixed(2));
   }
 
   if (DEBUG_VOLUMES) {

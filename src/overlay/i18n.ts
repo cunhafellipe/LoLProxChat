@@ -66,8 +66,18 @@ const STRINGS = {
   'settings.micVolume': { en: 'Mic Volume', es: 'Volumen mic' },
   'settings.forceTurn': { en: 'Hide IP (Force TURN)', es: 'Ocultar IP (forzar TURN)' },
   'settings.forceTurnHint': {
-    en: 'Routes all voice through the TURN relay so peers never see your public IP. Adds ~20-100ms latency. Takes effect on next peer connection.',
-    es: 'Envía la voz a través del servidor de retransmisión TURN, para que los demás jugadores nunca vean tu IP pública. Añade unos 20-100 ms de latencia. Se aplica a partir de la próxima conexión con otro jugador.',
+    en: 'Routes all voice through the TURN relay so peers never see your public IP. Adds ~20-100ms latency. Takes effect on next peer connection. On by default.',
+    es: 'Envía la voz a través del servidor de retransmisión TURN, para que los demás jugadores nunca vean tu IP pública. Añade unos 20-100 ms de latencia. Se aplica a partir de la próxima conexión con otro jugador. Activado por defecto.',
+  },
+  'settings.appAudio': { en: 'App audio (OBS)', es: 'Audio por la app (OBS)' },
+  'settings.appAudioHint': {
+    en: "When ON, the voices are played by lolproxchat.exe itself instead of the built-in browser, so OBS can capture them with Application Audio Capture → [lolproxchat.exe] on their own track. Output Device then lists the devices lolproxchat.exe sees. Use headphones: with speakers the others may hear themselves back. On by default.",
+    es: "Si está activado, las voces las reproduce lolproxchat.exe en vez del navegador interno, y así OBS puede capturarlas con Captura de audio de aplicación → [lolproxchat.exe] en una pista aparte. Dispositivo de salida pasa a mostrar los dispositivos que ve lolproxchat.exe. Usa cascos: con altavoces los demás podrían oírse a sí mismos. Activado por defecto.",
+  },
+  'settings.cameraOnly': { en: 'Camera mode', es: 'Modo cámara' },
+  'settings.cameraOnlyHint': {
+    en: "When ON (default), you hear exactly the players whose icons are inside your camera's white box on the minimap, and nobody else: not even someone beside you if your camera is elsewhere. Enemies only while their icon is drawn on your minimap, so one in a brush or in the fog stays silent. Others hear you when YOUR icon is inside THEIR box: looking at someone never makes them hear you. Does not need the app to find your own icon. Overrides Ally proximity and Voice on camera while on. Everyone should use the same version for it to work both ways.",
+    es: "Si está activado (por defecto), oyes exactamente a los jugadores cuyos iconos están dentro del recuadro blanco de la cámara en el minimapa, y a nadie más: ni siquiera a quien está a tu lado si tu cámara mira a otro sitio. A los enemigos solo mientras su icono aparece en tu minimapa: si están en un arbusto o en la niebla, no se oyen. Los demás te oyen cuando TU icono está dentro de SU recuadro: mirar a alguien nunca hace que te oiga. No necesita que la app encuentre tu propio icono. Mientras está activado, sustituye a Proximidad aliada y a Oír desde la cámara. Para que funcione en los dos sentidos, todos tenéis que usar esta misma versión.",
   },
   'settings.allyProximity': { en: 'Ally proximity', es: 'Proximidad aliada' },
   'settings.allyProximityHint': {
@@ -76,8 +86,8 @@ const STRINGS = {
   },
   'settings.cameraListen': { en: 'Voice on camera', es: 'Oír desde la cámara' },
   'settings.cameraListenHint': {
-    en: "When ON, you also hear the map from wherever your camera is looking, not just from your champion. One-way: the people you listen in on only hear you if they are near your champion or looking at you themselves. Only works between players who BOTH have it on: leave it off and nobody's camera can reach you, only players actually near you on the map. On by default. It lets you hear enemies your champion could not see, so turn it off for plain proximity.",
-    es: 'Si está activado, también oyes el mapa desde donde esté mirando tu cámara, no solo desde tu campeón. Funciona en un solo sentido: los jugadores a los que escuchas así solo te oyen si están cerca de tu campeón o si ellos mismos te están mirando. Solo funciona si ambos jugadores lo tienen activado: si lo dejas desactivado, la cámara de nadie te alcanza y solo te oyen los jugadores que de verdad están cerca de ti en el mapa. Viene activado por defecto. Te permite oír a enemigos que tu campeón no podría ver, así que desactívalo si quieres proximidad pura.',
+    en: "When ON, you also hear the champions inside your camera's white box on the minimap — what is on your screen — not just those near your champion. Enemies only while their icon is on your minimap, as everywhere: one in a brush or in the fog stays silent. One-way: the people you listen in on only hear you if they are near your champion or looking at you themselves. Only works between players who BOTH have it on: leave it off and nobody's camera can reach you, only players actually near you on the map. On by default.",
+    es: 'Si está activado, también oyes a los campeones que están dentro del recuadro blanco de la cámara en el minimapa (lo que tienes en pantalla), no solo a los que están cerca de tu campeón. A los enemigos, como siempre, solo mientras su icono aparece en tu minimapa: si están en un arbusto o en la niebla, no se oyen. Funciona en un solo sentido: los jugadores a los que escuchas así solo te oyen si están cerca de tu campeón o si ellos mismos te están mirando. Solo funciona si ambos jugadores lo tienen activado: si lo dejas desactivado, la cámara de nadie te alcanza y solo te oyen los jugadores que de verdad están cerca de ti en el mapa. Viene activado por defecto.',
   },
   'settings.wrongPosition': { en: 'Wrong position?', es: '¿Posición incorrecta?' },
   'settings.wrongPositionHint': {
@@ -87,8 +97,8 @@ const STRINGS = {
   'settings.reset': { en: 'RESET', es: 'REINICIAR' },
   'settings.sharedReset': { en: 'Shared RESET', es: 'REINICIAR compartido' },
   'settings.sharedResetHint': {
-    en: "When ON, pressing RESET also makes everyone else in the game who has this on find their champion on the minimap again, and their RESETs do the same for you. Off by default. Only works between players who have it on: leave it off and nobody's RESET reaches you. Either team can use it, at most once every 15 seconds per game.",
-    es: 'Si está activado, al pulsar REINICIAR también hace que todos los demás jugadores de la partida que lo tengan activado vuelvan a buscar a su campeón en el minimapa, y sus REINICIAR hacen lo mismo contigo. Viene desactivado por defecto. Solo funciona entre jugadores que lo tengan activado: si lo dejas desactivado, el REINICIAR de nadie te afecta. Funciona con los dos equipos, como mucho una vez cada 15 segundos por partida.',
+    en: "When ON, pressing RESET also makes everyone else in the game who has this on find their champion on the minimap again, and their RESETs do the same for you. On by default. Only works between players who have it on: leave it off and nobody's RESET reaches you. Either team can use it, at most once every 15 seconds per game.",
+    es: 'Si está activado, al pulsar REINICIAR también hace que todos los demás jugadores de la partida que lo tengan activado vuelvan a buscar a su campeón en el minimapa, y sus REINICIAR hacen lo mismo contigo. Viene activado por defecto. Solo funciona entre jugadores que lo tengan activado: si lo dejas desactivado, el REINICIAR de nadie te afecta. Funciona con los dos equipos, como mucho una vez cada 15 segundos por partida.',
   },
   'notice.sharedReset': {
     en: '{name} pressed RESET — finding you again',

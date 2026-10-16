@@ -595,6 +595,57 @@ describe('camera viewport (#36, voice on camera)', () => {
     });
     await driveTracker(on, noRect);
     expect(on.svc.getCameraPosition()).toBeNull();
+    expect(on.svc.getCameraView()).toBeNull();
+    expect(off.svc.getCameraView()).toBeNull();
+  });
+
+  test('the whole rectangle resolves to game coordinates, size included', async () => {
+    const scenes = renderScenes(walk(12));
+    const h = newTracker(scenes.map(s => s.frame), { classifier: new ZeroScorer(), cameraTracking: true });
+    await driveTracker(h, scenes);
+
+    const view = h.svc.getCameraView();
+    expect(view).not.toBeNull();
+    const rect = BACKDROP.camera!;
+    const unitsPerPx = MAP_DIMENSIONS.summoners_rift.width / REGION.width;
+    // Edge to edge is (w - 1) pixels; allow a pixel either way.
+    expect(Math.abs(view!.w - (rect.w - 1) * unitsPerPx)).toBeLessThanOrEqual(unitsPerPx * 1.01);
+    expect(Math.abs(view!.h - (rect.h - 1) * unitsPerPx)).toBeLessThanOrEqual(unitsPerPx * 1.01);
+    expect(view!.x).toBe(h.svc.getCameraPosition()!.x);
+    expect(view!.y).toBe(h.svc.getCameraPosition()!.y);
+  });
+});
+
+describe('visible enemies (fog of war, read off the minimap)', () => {
+  test('reports where enemy icons are drawn, and forgets them shortly after they vanish', async () => {
+    const fogged = walk(10, at(START, STEP, 10), STEP, { ...BACKDROP, enemies: [] });
+    const scenes = renderScenes([...walk(10), ...fogged]);
+    const h = newTracker(scenes.map(s => s.frame), { classifier: new ZeroScorer() });
+
+    await driveTracker(h, scenes.slice(0, 10));
+    const seen = h.svc.getVisibleEnemies();
+    expect(seen).toHaveLength(BACKDROP.enemies!.length);
+    for (const enemy of BACKDROP.enemies!) {
+      expect(seen.some(p => distance(gameToTruth(p), enemy) <= 2 && p.n === 1)).toBe(true);
+    }
+
+    // The enemies walk into the fog (no longer drawn). 10 frames at 125ms is
+    // well past VISIBLE_ENEMY_HOLD_MS, so the list must be empty again.
+    await driveTracker(h, scenes.slice(10));
+    expect(h.svc.getVisibleEnemies()).toEqual([]);
+  });
+
+  test('two enemies whose icons merge into one red blob count as two', async () => {
+    // A bot-lane duo walking together: half an icon apart, and closer.
+    for (const offset of [0.5, 0.3]) {
+      const a: Point = { x: 180, y: 120 };
+      const b: Point = { x: a.x + ICON_DIAM * offset, y: a.y + 2 };
+      const scenes = renderScenes(walk(10, START, STEP, { ...BACKDROP, enemies: [a, b] }));
+      const h = newTracker(scenes.map(s => s.frame), { classifier: new ZeroScorer() });
+      await driveTracker(h, scenes);
+      const near = h.svc.getVisibleEnemies().filter(p => distance(gameToTruth(p), a) < ICON_DIAM);
+      expect(near.reduce((sum, p) => sum + p.n, 0)).toBe(2);
+    }
   });
 });
 

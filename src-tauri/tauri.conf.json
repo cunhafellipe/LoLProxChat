@@ -36,6 +36,21 @@
         "skipTaskbar": true,
         "focus": false,
         "url": "scanner/scanner.html"
+      },
+      {
+        "label": "speakers",
+        "title": "LoLProxChat Speakers",
+        "width": 380,
+        "height": 480,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": false,
+        "url": "speakers/speakers.html"
       }
     ],
     "security": {

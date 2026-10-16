@@ -1,7 +1,8 @@
 import {
   getAllyProximity, setAllyProximity, getCameraListen, setCameraListen, getSharedReset, setSharedReset,
-  applyAudioDefaultsOnce,
+  getCameraOnly, setCameraOnly, getAppAudio, setAppAudio, applyAudioDefaultsOnce,
 } from '../../src/services/audio-prefs';
+import { getForceTurnRelay, setForceTurnRelay } from '../../src/services/privacy';
 
 // The node test environment has no localStorage; a plain map is all the
 // module touches.
@@ -15,9 +16,13 @@ const store = new Map<string, string>();
 describe('audio prefs', () => {
   beforeEach(() => store.clear());
 
-  test('both toggles are on for a fresh install', () => {
+  test('every panel toggle is on for a fresh install', () => {
     expect(getAllyProximity()).toBe(true);
     expect(getCameraListen()).toBe(true);
+    expect(getCameraOnly()).toBe(true);
+    expect(getSharedReset()).toBe(true);
+    expect(getAppAudio()).toBe(true);
+    expect(getForceTurnRelay()).toBe(true);
   });
 
   test('turning one off survives a restart, and does not touch the other', () => {
@@ -33,15 +38,20 @@ describe('audio prefs', () => {
     expect(getAllyProximity()).toBe(false);
   });
 
-  test('the first launch of this build puts both toggles back on, once', () => {
+  test('the first launch of this build puts every toggle back on, once', () => {
     setAllyProximity(false);
     setCameraListen(false);
-    setSharedReset(true);
+    setCameraOnly(false);
+    setSharedReset(false);
+    setAppAudio(false);
+    setForceTurnRelay(false);
     expect(applyAudioDefaultsOnce()).toBe(true);
     expect(getAllyProximity()).toBe(true);
     expect(getCameraListen()).toBe(true);
-    // An opt-in is not a default to restore.
+    expect(getCameraOnly()).toBe(true);
     expect(getSharedReset()).toBe(true);
+    expect(getAppAudio()).toBe(true);
+    expect(getForceTurnRelay()).toBe(true);
 
     // Turned off again afterwards, it stays off across later launches.
     setAllyProximity(false);
@@ -66,22 +76,26 @@ describe('audio prefs', () => {
     expect(getCameraListen()).toBe(true);
   });
 
-  test('shared RESET is off until turned on, and anything but "on" reads as off', () => {
-    expect(getSharedReset()).toBe(false);
-    store.set('lolproxchat.sharedReset', 'true');
-    expect(getSharedReset()).toBe(false);
-    setSharedReset(true);
-    expect(store.get('lolproxchat.sharedReset')).toBe('1');
-    expect(getSharedReset()).toBe(true);
+  test('shared RESET, app audio and hide IP stay off once turned off', () => {
     setSharedReset(false);
+    setAppAudio(false);
+    setForceTurnRelay(false);
+    expect(store.get('lolproxchat.sharedReset')).toBe('0');
+    expect(store.get('lolproxchat.forceTurnRelay')).toBe('0');
     expect(getSharedReset()).toBe(false);
+    expect(getAppAudio()).toBe(false);
+    expect(getForceTurnRelay()).toBe(false);
+    setSharedReset(true);
+    expect(getSharedReset()).toBe(true);
   });
 
-  test('shared RESET reads as off when storage cannot be read', () => {
+  test('the toggles read as on when storage cannot be read', () => {
     const real = (globalThis as any).localStorage;
     (globalThis as any).localStorage = { getItem: () => { throw new Error('blocked'); } };
     try {
-      expect(getSharedReset()).toBe(false);
+      expect(getSharedReset()).toBe(true);
+      expect(getAppAudio()).toBe(true);
+      expect(getForceTurnRelay()).toBe(true);
     } finally {
       (globalThis as any).localStorage = real;
     }

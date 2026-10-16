@@ -64,6 +64,50 @@ import {
   isInBaseZone,
 } from './tracking-helpers';
 
+/** The camera rectangle in game coordinates: centre (x, y) and size (w, h). */
+export interface CameraView {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** An enemy icon drawn on our minimap (game coordinates), holding `n` champions. */
+export interface VisibleEnemy {
+  x: number;
+  y: number;
+  n: number;
+}
+
+// How long an enemy icon counts as visible after it was last drawn, so a frame
+// where it is covered or flickers does not cut the voice. Short enough that an
+// enemy stepping into a brush goes quiet within about half a second.
+export const VISIBLE_ENEMY_HOLD_MS = 600;
+// Two sightings closer than this are the same icon (game units; an icon is
+// ~1300 across on Summoner's Rift).
+const VISIBLE_ENEMY_MERGE_UNITS = 400;
+const MAX_VISIBLE_ENEMY_ICONS = 5;
+// A red blob no wider than this many icon diameters is one icon.
+const SINGLE_ICON_SPAN = 1.3;
+
+/**
+ * A red blob that is one enemy icon ring, or a few merged (enemies standing
+ * together). Looser on fill than isPossibleOccluder: two overlapping rings
+ * fill 41-43% of their box on the real Summoner's Rift minimap, and a single
+ * ring sits right at that filter's 0.40. The map's red structures are far
+ * smaller than an icon (at most ~11px across against a 24px icon there), so
+ * the size bound is what keeps them out.
+ */
+function isPossibleEnemyIcon(b: Blob, expectedIconDiam: number): boolean {
+  if (b.color !== 'red' || b.pixels < 15) return false;
+  if (b.fillRatio > 0.55 || b.fillRatio < 0.08) return false;
+  const bw = b.maxX - b.minX + 1;
+  const bh = b.maxY - b.minY + 1;
+  const lo = expectedIconDiam * 0.6;
+  const hi = expectedIconDiam * 2.6;
+  return bw >= lo && bh >= lo && bw <= hi && bh <= hi;
+}
+
 export enum TrackingState {
   SCANNING = 'scanning',
   LOCKED = 'locked',
@@ -77,6 +121,7 @@ export const WARN_MINIMAP_TOO_LARGE = "Minimap too large to capture — lower Mi
 export const WARN_CALIBRATION_OUTSIDE_CAPTURE = 'Calibrated minimap is outside the capture area — recalibrate.';
 
 import type { Blob } from './blob-types';
+import type { CameraHearing } from './camera-hearing';
 
 export class TrackingService {
   private state: TrackingState = TrackingState.SCANNING;
@@ -303,6 +348,78 @@ export class TrackingService {
    * their champion is. See docs/compliance.md for why the two are kept apart.
    */
   getCameraPosition(): Position | null { return this.cameraPosition; }
+
+  /**
+   * The whole camera rectangle in game coordinates — centre plus size — or
+   * null whenever getCameraPosition() is. Everything inside it is on the
+   * player's screen.
+   */
+  getCameraView(): CameraView | null {
+    if (!this.cameraPosition || !this.cameraBox || !this.minimapRegion) return null;
+    const region = this.minimapRegion;
+    // The minimap's y axis is flipped against the game's, so size the box
+    // from the corners' absolute differences rather than trusting an order.
+    const a = this.pixelToGamePosition(region.x + this.cameraBox.x0, region.y + this.cameraBox.y0, region);
+    const b = this.pixelToGamePosition(region.x + this.cameraBox.x1, region.y + this.cameraBox.y1, region);
+    return {
+      x: this.cameraPosition.x,
+      y: this.cameraPosition.y,
+      w: Math.abs(b.x - a.x),
+      h: Math.abs(b.y - a.y),
+    };
+  }
+
+  /**
+   * Enemy icons drawn on our minimap (game coordinates), each seen within the
+   * last VISIBLE_ENEMY_HOLD_MS so a frame where an icon is briefly covered
+   * does not drop it. `n` is how many champions the icon holds: two enemies
+   * standing together merge into one red blob. The minimap only draws an
+   * enemy our team can see, so this is the fog-of-war answer to "is that enemy
+   * visible", read off the screen like everything else.
+   */
+  getVisibleEnemies(): VisibleEnemy[] {
+    const now = performance.now();
+    return this.visibleEnemies
+      .filter((e) => now - e.seenMs < VISIBLE_ENEMY_HOLD_MS)
+      .map((e) => ({ x: e.x, y: e.y, n: e.n }));
+  }
+
+  /**
+   * Refresh the visible-enemy list from this frame's blobs: every red blob
+   * shaped like one to a few icon rings (isPossibleEnemyIcon). `iconBlobs`
+   * (filterIconBlobs' single icons, either colour) only teach what one ring
+   * weighs in pixels.
+   */
+  private updateVisibleEnemies(
+    allBlobs: Blob[],
+    iconBlobs: Blob[],
+    region: { x: number; y: number; width: number; height: number },
+  ): void {
+    const now = performance.now();
+    const diam = Math.max(1, this.expectedIconDiam);
+    // What one icon's ring weighs in pixels, learnt from single icons of
+    // either colour; a merged blob of k icons has about k rings' worth.
+    for (const b of iconBlobs) {
+      if (Math.max(b.maxX - b.minX + 1, b.maxY - b.minY + 1) <= diam * SINGLE_ICON_SPAN) {
+        this.ringPixelsEma = this.ringPixelsEma > 0 ? this.ringPixelsEma * 0.9 + b.pixels * 0.1 : b.pixels;
+      }
+    }
+    const kept = this.visibleEnemies.filter((e) => now - e.seenMs < VISIBLE_ENEMY_HOLD_MS);
+    for (const b of allBlobs.filter((x) => isPossibleEnemyIcon(x, diam))) {
+      const pos = this.pixelToGamePosition(region.x + b.cx, region.y + b.cy, region);
+      const span = Math.max(b.maxX - b.minX + 1, b.maxY - b.minY + 1) / diam;
+      const bySpan = span <= SINGLE_ICON_SPAN ? 1 : span <= 2.1 ? 2 : 3;
+      const byPixels = this.ringPixelsEma > 0 ? Math.round(b.pixels / this.ringPixelsEma) : 1;
+      const n = Math.max(1, Math.min(3, Math.max(bySpan, byPixels)));
+      // One entry per icon: replace any older sighting of the same one.
+      for (let i = kept.length - 1; i >= 0; i--) {
+        if (Math.hypot(kept[i].x - pos.x, kept[i].y - pos.y) < VISIBLE_ENEMY_MERGE_UNITS) kept.splice(i, 1);
+      }
+      kept.push({ x: pos.x, y: pos.y, n, seenMs: now });
+    }
+    // Five enemies at most, so five icons; anything past that is noise.
+    this.visibleEnemies = kept.slice(-MAX_VISIBLE_ENEMY_ICONS);
+  }
 
   /** Why the camera rectangle was not found this frame, with the pixel count
    *  that separates "nothing passed the white threshold" from "wrong shape". */
@@ -542,6 +659,18 @@ export class TrackingService {
 
   loadChampionTemplate(_championName: string): void {
     console.log('[Tracking] Using color filter + blob detection');
+  }
+
+  /**
+   * Camera mode (camera-hearing.ts): fed every frame the tracker reads,
+   * alive or dead. null turns it off.
+   */
+  setCameraHearing(hearing: CameraHearing | null): void {
+    this.cameraHearing = hearing;
+  }
+
+  getCameraHearing(): CameraHearing | null {
+    return this.cameraHearing;
   }
 
   setClassifier(classifier: BlobScorer): void {
@@ -1060,7 +1189,11 @@ export class TrackingService {
   // camera is on: which teammate icon the player keeps on screen is how a
   // wrong lock is found (see CameraDwell). Nothing about it leaves the tracker.
   private cameraBox: ViewportBox | null = null;
+  private cameraHearing: CameraHearing | null = null;
   private cameraDwell = new CameraDwell();
+  // Recent enemy icon sightings — see getVisibleEnemies().
+  private visibleEnemies: Array<VisibleEnemy & { seenMs: number }> = [];
+  private ringPixelsEma = 0;
   // When the last lock or camera-driven switch happened; the camera may not
   // move us again for CAMERA_SWITCH_COOLDOWN_MS after either.
   private lastLockChangeMs = 0;
@@ -1298,15 +1431,17 @@ export class TrackingService {
   }
 
   /**
-   * While dead, keep reading only the camera rectangle, a few times a second,
-   * so "voice on camera" follows where the player is watching exactly as it
-   * does while alive. Skipped entirely with the setting off, so a dead
-   * champion otherwise still costs no capture. Without this the camera froze
-   * at the moment of death for the whole timer.
+   * While dead, keep reading the camera rectangle and the enemy icons a few
+   * times a second, so "voice on camera" follows where the player is watching
+   * exactly as it does while alive, and knows which enemies the team can see.
+   * Skipped entirely with the setting off, so a dead champion otherwise still
+   * costs no capture — the visible-enemy list then runs out, and a dead player
+   * hears no enemies until respawn. Without this the camera froze at the moment
+   * of death for the whole timer.
    */
   private lastDeadCameraMs = 0;
   private async deadCameraTick(): Promise<void> {
-    if (!this.cameraTrackingEnabled || !this.minimapRegion || this.tickRunning) return;
+    if ((!this.cameraTrackingEnabled && !this.cameraHearing) || !this.minimapRegion || this.tickRunning) return;
     const now = performance.now();
     if (now - this.lastDeadCameraMs < 200) return;
     this.lastDeadCameraMs = now;
@@ -1314,8 +1449,14 @@ export class TrackingService {
     try {
       const frame = decodeCaptureFrame(await this.frameSource.capture());
       if (frame.width !== this.captureBounds.width || frame.height !== this.captureBounds.height) return;
-      const { viewportMask } = this.buildWhiteMasks(frame, this.minimapRegion);
-      this.updateCameraPosition(viewportMask, this.minimapRegion);
+      const region = this.minimapRegion;
+      const { viewportMask } = this.buildWhiteMasks(frame, region);
+      this.updateCameraPosition(viewportMask, region);
+      const mask = this.dilate(this.createMask(frame, region), region.width, region.height);
+      const allBlobs = this.findBlobs(mask, region.width, region.height);
+      const singleIcons = this.filterIconBlobs(allBlobs, mask, region.width, region.height);
+      this.updateVisibleEnemies(allBlobs, singleIcons, region);
+      this.cameraHearing?.onFrame(frame, region, allBlobs, singleIcons, viewportMask, now);
     } catch (err) {
       this.logCaptureError('[Tracking] capture while dead failed:', err);
     } finally {
@@ -1379,10 +1520,11 @@ export class TrackingService {
     let mask = this.createMask(frame, region);
     mask = this.dilate(mask, region.width, region.height);
     const allBlobs = this.findBlobs(mask, region.width, region.height);
-    const iconBlobs = this.excludeTeammates(
-      this.excludeBystanders(this.filterIconBlobs(allBlobs, mask, region.width, region.height)));
+    const singleIcons = this.filterIconBlobs(allBlobs, mask, region.width, region.height);
+    const iconBlobs = this.excludeTeammates(this.excludeBystanders(singleIcons));
     this.occluderBlobs = allBlobs.filter(b => isPossibleOccluder(b, this.expectedIconDiam));
     this.stackBlobs = allBlobs.filter(b => isPossibleStack(b, this.expectedIconDiam));
+    this.updateVisibleEnemies(allBlobs, iconBlobs, region);
     this.frameTealIcons = iconBlobs.filter(b => b.color === 'teal');
     this.minimapReadable = allBlobs.length > 0;
 
@@ -1407,6 +1549,7 @@ export class TrackingService {
 
     // Build white pixel masks (separating movement path from viewport rectangle)
     const { whiteMask, viewportMask } = this.buildWhiteMasks(frame, region);
+    this.cameraHearing?.onFrame(frame, region, allBlobs, singleIcons, viewportMask, nowMs);
 
     // Camera viewport centre → game coords, for "voice on camera" (#36).
     // Cheap (two counting passes over a mask we already built) and

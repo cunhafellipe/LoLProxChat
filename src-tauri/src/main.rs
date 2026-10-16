@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio_out;
 mod capture;
 mod game_bundle;
 mod game_window;
@@ -127,6 +128,7 @@ fn position_scanner(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f
     let Some(window) = app.get_webview_window("scanner") else { return };
     let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
     let _ = window.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
+    make_tool_window(&window);
     let _ = window.show();
 }
 
@@ -135,6 +137,45 @@ fn position_scanner(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f
 #[tauri::command]
 fn hide_scanner(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("scanner") {
+        let _ = window.hide();
+    }
+}
+
+/// Marks a helper window (scanner, speaking overlay) as a tool window: OBS's
+/// window lists and Alt+Tab leave those out, so a streamer picking lolproxchat.exe
+/// in "Application Audio Capture" sees only the panel, "[lolproxchat.exe]: LoLProxChat".
+fn make_tool_window(window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    let Ok(h) = window.hwnd() else { return };
+    let hwnd = HWND(h.0 as *mut _);
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let want = (ex | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+        if want != ex {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+        }
+    }
+}
+
+/// Put the "who is speaking" window at `x, y` (physical screen pixels: the
+/// game's top-left corner, inset) and show it. It is click-through and draws
+/// nothing until someone speaks.
+#[tauri::command]
+fn position_speakers(app: tauri::AppHandle, x: f64, y: f64) {
+    let Some(window) = app.get_webview_window("speakers") else { return };
+    let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
+    let _ = window.set_ignore_cursor_events(true);
+    make_tool_window(&window);
+    let _ = window.show();
+}
+
+/// Hide the speaking overlay when a session ends.
+#[tauri::command]
+fn hide_speakers(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("speakers") {
         let _ = window.hide();
     }
 }
@@ -223,6 +264,12 @@ fn main() {
             // feedback loop to break and ShadowPlay / OBS see everything.
             if let Some(scanner) = app.get_webview_window("scanner") {
                 let _ = scanner.set_ignore_cursor_events(true);
+                make_tool_window(&scanner);
+            }
+            // So is the speaking overlay: it sits over the game.
+            if let Some(speakers) = app.get_webview_window("speakers") {
+                let _ = speakers.set_ignore_cursor_events(true);
+                make_tool_window(&speakers);
             }
 
             // Panel starts globally click-through too. The polling loop below
@@ -293,6 +340,13 @@ fn main() {
             lcu::get_league_install_dir,
             position_scanner,
             hide_scanner,
+            position_speakers,
+            hide_speakers,
+            audio_out::audio_out_devices,
+            audio_out::audio_out_start,
+            audio_out::audio_out_push,
+            audio_out::audio_out_stop,
+            audio_out::audio_out_status,
             game_window::get_game_window_info,
             set_panel_size,
             resize_overlay,

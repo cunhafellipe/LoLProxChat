@@ -284,6 +284,64 @@ describe('E3 enemies fade with distance', () => {
   });
 });
 
+describe('E3b fog of war: an enemy the minimap does not draw is not heard', () => {
+  // The client reports the enemy icons its minimap draws; the server keeps a
+  // nearby enemy with no icon (a brush) out of the response. The rule itself
+  // is unit-tested in server/tests/volumes.test.ts; this proves the client
+  // puts the list on the wire and the gain follows it.
+  afterEach(() => setCameraListen(false));
+
+  it('silences a nearby enemy who steps into a brush, and brings them back out', async () => {
+    const { players, a, b } = roster('CHAOS');
+    const [one, two] = track(makeClient(a, players), makeClient(b, players));
+    one.tracker.moveTo(7000, 7000);
+    two.tracker.moveTo(7400, 7000);
+    one.tracker.sees({ x: 7400, y: 7000 });
+    await startAll([one, two]);
+    await waitForMesh(one, two);
+
+    const visible = await waitFor(
+      () => volumesFor(a).map((e) => e.response?.peerVolumes?.[b]).filter((v) => v !== undefined).pop(),
+      'the visible enemy at 400 units to be audible',
+    );
+    expect(visible).toBe(1.0);
+
+    one.tracker.sees();
+    await waitFor(
+      () => volumesFor(a).slice(-2).every((e) => e.response && !(b in (e.response.peerVolumes ?? {}))),
+      'the enemy in the brush to drop out',
+    );
+    await waitFor(() => one.peerFor(b)!.volume === 0, 'the hidden enemy to fall silent', 6000);
+
+    one.tracker.sees({ x: 7400, y: 7000 });
+    await waitFor(() => one.peerFor(b)!.volume > 0.9, 'the enemy to be heard again once drawn');
+  });
+
+  it('hears an enemy in the camera box only while their icon is drawn', async () => {
+    const { players, a, b } = roster('CHAOS');
+    const [one, two] = track(makeClient(a, players), makeClient(b, players));
+    one.tracker.moveTo(1000, 1000);
+    two.tracker.moveTo(12000, 12000);
+    one.tracker.sees();
+    await startAll([one, two]);
+    await waitForMesh(one, two);
+
+    setCameraListen(true);
+    await waitFor(() => one.tracker.cameraTrackingEnabled, 'camera tracking to be enabled');
+    one.tracker.lookAt(12000, 12000, { w: 2400, h: 1350 });
+    const since = volumesFor(a).length;
+    await waitFor(() => volumesFor(a).length > since + 4, 'several exchanges with B fogged');
+    expect(volumesFor(a).slice(since + 1).filter((e) => b in (e.response?.peerVolumes ?? {}))).toEqual([]);
+
+    one.tracker.sees({ x: 12040, y: 11980 });
+    const heard = await waitFor(
+      () => volumesFor(a).map((e) => e.response?.peerVolumes?.[b]).filter((v) => v !== undefined).pop(),
+      'A to hear the visible enemy in the box',
+    );
+    expect(heard).toBe(1.0);
+  });
+});
+
 describe('E4 an enemy past vision range is held, then silenced (#27)', () => {
   it('keeps the last volume through the grace window before falling to zero', async () => {
     const { players, a, b } = roster('CHAOS');

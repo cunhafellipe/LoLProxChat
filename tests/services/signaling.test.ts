@@ -225,6 +225,30 @@ describe('SignalingService', () => {
     expect(JSON.parse(sockets()[0].sent[1])).toEqual({ type: 'coords', x: 1, y: 2 });
   });
 
+  it('sends the camera box and the visible enemy icons when it has them', () => {
+    const service = new SignalingService();
+    join(service);
+    sockets()[0].emitOpen();
+    const sent = (i: number) => JSON.parse(sockets()[0].sent[i]);
+
+    service.sendCoords(1, 2, false, { x: 7000.4, y: 7000.6, w: 2400.2, h: 1350.7 }, undefined,
+      [{ x: 7050.2, y: 6980.9, n: 1 }, { x: 300, y: 10, n: 2 }]);
+    expect(sent(1)).toEqual({
+      type: 'coords', x: 1, y: 2, cx: 7000.4, cy: 7000.6, cw: 2400, ch: 1351,
+      vis: [[7050, 6981], [300, 10, 2]],
+    });
+
+    // Rectangle unreadable: the centre alone. No camera: the icons still go.
+    service.sendCoords(1, 2, false, { x: 1, y: 2 });
+    expect(sent(2)).toEqual({ type: 'coords', x: 1, y: 2, cx: 1, cy: 2 });
+    service.sendCoords(1, 2, false, null, undefined, []);
+    expect(sent(3)).toEqual({ type: 'coords', x: 1, y: 2, vis: [] });
+
+    // A disowned position carries neither.
+    service.sendCoords(1, 2, true, { x: 5, y: 5, w: 10, h: 10 }, undefined, [{ x: 1, y: 1, n: 1 }]);
+    expect(sent(4)).toEqual({ type: 'coords', x: 1, y: 2, stale: true });
+  });
+
   describe('shared RESET', () => {
     const sent = (i = 0) => sockets()[i].sent.map(m => JSON.parse(m));
 

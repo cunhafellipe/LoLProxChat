@@ -1,3 +1,4 @@
+import type { AppAudioOutput, AppTap } from './app-audio-output';
 import { getIceServers } from '../core/config';
 import { getForceTurnRelay } from './privacy';
 
@@ -98,6 +99,10 @@ export class PeerConnection {
   // produce audible dropouts. null = first call (snap to value, no smoothing).
   private smoothedVolume: number | null = null;
   private lastSetVolumeMs = 0;
+  // App audio (app-audio-output.ts): while set, the element only pulls the
+  // track, always muted, and the voice is heard through `appTap` instead.
+  private appOut: AppAudioOutput | null = null;
+  private appTap: AppTap | null = null;
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   // Fired when ICE has fully failed. The audio layer is responsible for
@@ -136,6 +141,7 @@ export class PeerConnection {
     this.pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track from', remoteName, 'kind:', event.track.kind);
       this.remoteStream.addTrack(event.track);
+      this.attachAppTap();
       // Ensure audio plays (autoplay may be blocked by Chromium policy)
       this.tryPlay();
       // Re-apply the output device now that the element has a live track.
@@ -204,9 +210,37 @@ export class PeerConnection {
   }
 
   private applyGain(value: number): void {
+    const v = Math.max(0, Math.min(1, value));
+    if (this.appOut) {
+      // App audio: the element stays muted; the voice's level is its tap's.
+      this.appTap?.setGain(this.muted ? 0 : v);
+      return;
+    }
     // Element-only playback. Per-tick EMA smoothing (setVolume) keeps the steps
     // small enough to be click-free without WebAudio ramping.
-    this.audioElement.volume = Math.max(0, Math.min(1, value));
+    this.audioElement.volume = v;
+  }
+
+  /**
+   * Play this voice through lolproxchat.exe (app audio) instead of the browser, or
+   * back through the browser with null. The element keeps playing either way —
+   * Chromium only delivers a remote track's audio while an element plays it —
+   * but muted while app audio has the voice.
+   */
+  setAppOutput(out: AppAudioOutput | null): void {
+    if (out === this.appOut) return;
+    this.appTap?.disconnect();
+    this.appTap = null;
+    this.appOut = out;
+    this.audioElement.muted = out ? true : this.muted;
+    this.attachAppTap();
+    this.applyGain(this.smoothedVolume ?? this.targetVolume);
+  }
+
+  private attachAppTap(): void {
+    if (!this.appOut || this.appTap || this.remoteStream.getAudioTracks().length === 0) return;
+    this.appTap = this.appOut.attach(this.remoteStream);
+    this.appTap.setGain(this.muted ? 0 : (this.smoothedVolume ?? this.targetVolume));
   }
 
   /**
@@ -360,14 +394,30 @@ export class PeerConnection {
     if (!this.muted) this.applyGain(this.smoothedVolume);
   }
 
+  /**
+   * How loud this peer's voice is arriving right now, 0..1 — WebRTC's own
+   * per-packet level (1.0 = 0 dBov), read before our volume is applied. 0
+   * before any audio has arrived. Drives the "who is speaking" overlay.
+   */
+  getAudioLevel(): number {
+    let level = 0;
+    for (const r of this.pc.getReceivers()) {
+      if (r.track?.kind !== 'audio' || typeof r.getSynchronizationSources !== 'function') continue;
+      for (const s of r.getSynchronizationSources()) level = Math.max(level, s.audioLevel ?? 0);
+    }
+    return level;
+  }
+
   mute(): void {
     this.muted = true;
     this.audioElement.muted = true;
+    this.appTap?.setGain(0);
   }
 
   unmute(): void {
     this.muted = false;
-    this.audioElement.muted = false;
+    // Under app audio the element stays muted: it only pulls the track.
+    this.audioElement.muted = !!this.appOut;
     // Resume at where the glide has actually reached, not at the target it is
     // still travelling towards — otherwise unmuting jumps the gain.
     this.applyGain(this.smoothedVolume ?? this.targetVolume);
@@ -378,6 +428,8 @@ export class PeerConnection {
       clearInterval(this.statsIntervalId);
       this.statsIntervalId = null;
     }
+    this.appTap?.disconnect();
+    this.appTap = null;
     this.remoteStream.getTracks().forEach((t) => t.stop());
     this.pc.close();
     this.audioElement.pause();

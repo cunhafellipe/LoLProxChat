@@ -185,6 +185,8 @@ export interface TemplateSet {
    *  blank or repeated in streamer mode, so the orchestrator does not use them). */
   id: string;
   vecs: Float32Array[];
+  /** Where the (first) icon was downloaded from, for showing it. */
+  iconUrl?: string;
 }
 
 export interface MatchScore { id: string; score: number }
@@ -408,6 +410,40 @@ export async function loadTeamTemplates(team: TeammateSkin[], signal?: AbortSign
   }));
   signal?.throwIfAborted();
   console.log('[Skins] Teammate icons: ' + results.map(r => r.note).join('; '));
+  return results.flatMap(r => (r.set ? [r.set] : []));
+}
+
+export interface PlayerChampion {
+  id: string;
+  championName: string;
+  rawChampionName?: string;
+}
+
+/**
+ * Every player's BASE minimap icon (each form's), for camera mode: the minimap
+ * draws the base icon whatever skin a champion has on (2026-10-12 recordings:
+ * Soraka 16, Syndra 54 and Volibear 29 all drawn with their base icons). A
+ * player whose icons cannot be had is left out, and logged. Aborting `signal`
+ * stops the downloads and rejects.
+ */
+export async function loadBaseTemplates(players: PlayerChampion[], signal?: AbortSignal): Promise<TemplateSet[]> {
+  const results = await Promise.all(players.map(async (p): Promise<{ set: TemplateSet | null; note: string }> => {
+    const alias = championAlias(p.rawChampionName, p.championName);
+    try {
+      const listing = await (await cachedFetch(`${CDRAGON}/${alias}/hud/`, LISTING_MAX_AGE_MS, signal)).text();
+      const files = iconFilesForSkin(listing, alias, 0);
+      if (files.length === 0) throw new Error('no minimap icon in the listing');
+      const images = await Promise.all(files.map(async f =>
+        decodeRgba(await (await cachedFetch(`${CDRAGON}/${alias}/hud/${f}`, ICON_MAX_AGE_MS, signal)).blob())));
+      const vecs = images.flatMap(img => iconTemplates(img.data, img.width, img.height));
+      const iconUrl = `${CDRAGON}/${alias}/hud/${files[0]}`;
+      return { set: { id: p.id, vecs, iconUrl }, note: p.championName + ' (' + files.join(', ') + ')' };
+    } catch (e) {
+      return { set: null, note: p.championName + ': unavailable (' + String(e) + ')' };
+    }
+  }));
+  signal?.throwIfAborted();
+  console.log('[Camera] Base icons: ' + results.map(r => r.note).join('; '));
   return results.flatMap(r => (r.set ? [r.set] : []));
 }
 

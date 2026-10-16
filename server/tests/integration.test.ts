@@ -245,6 +245,44 @@ describe('tiered proximity — end-to-end against the real server', () => {
     alice.close(); enemy.close();
   });
 
+  it('fog of war: only enemies drawn on my minimap are heard, near or in my camera box', async () => {
+    const room = 'r-fog';
+    const me = await joinRoom(room, 'FogMe', 'ORDER');
+    const near = await joinRoom(room, 'FogNear', 'CHAOS');      // beside me, in a brush
+    const seen = await joinRoom(room, 'FogSeen', 'CHAOS');      // in my camera box, drawn
+    const hidden = await joinRoom(room, 'FogHidden', 'CHAOS');  // in my camera box, fogged
+
+    sendCoords(near, 300, 0);
+    sendCoordsWithCamera(seen, 7000, 7000, 7000, 7000);
+    sendCoordsWithCamera(hidden, 8100, 7300, 8100, 7300);
+    me.send(JSON.stringify({
+      type: 'coords', x: 0, y: 0, cx: 7000, cy: 7000, cw: 2400, ch: 1350, vis: [[7050, 6980]],
+    }));
+    await sleep(500);
+
+    const result = await computeVolumes({ x: 0, y: 0 }, room, 'FogMe');
+    expect(result.peerVolumes).toEqual({ FogSeen: 1.0 });
+
+    // The enemy beside me steps out of the brush: their icon is drawn too.
+    me.send(JSON.stringify({
+      type: 'coords', x: 0, y: 0, cx: 7000, cy: 7000, cw: 2400, ch: 1350, vis: [[7050, 6980], [310, 10]],
+    }));
+    await sleep(300);
+    expect((await computeVolumes({ x: 0, y: 0 }, room, 'FogMe')).peerVolumes)
+      .toEqual({ FogSeen: 1.0, FogNear: 1.0 });
+
+    // A report without a list (an older client) is scored as before: the
+    // camera by its centre and range, nobody's visibility checked.
+    sendCoordsWithCamera(me, 0, 0, 7000, 7000);
+    await sleep(300);
+    const legacy = await computeVolumes({ x: 0, y: 0 }, room, 'FogMe');
+    expect(legacy.peerVolumes.FogNear).toBe(1.0);
+    expect(legacy.peerVolumes.FogSeen).toBe(1.0);
+    expect(legacy.peerVolumes.FogHidden).toBeGreaterThan(0);
+
+    me.close(); near.close(); seen.close(); hidden.close();
+  });
+
   it('a listenPosition in the request buys nothing (#36)', async () => {
     // The pre-v0.5.9 wire field. Honouring it would let a client listen in on
     // a player who never turned the feature on; the published camera is what
