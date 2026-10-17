@@ -81,7 +81,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 4. **Voice** — WebRTC peer-to-peer audio between players (Opus 128 kbps, DTLS-SRTP). No audio touches any server.
 5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room. **Everyone's voice fades in at ~champion vision range (~1350 game units)** and is at full volume inside ~900 units, about the distance two ranged laners hold — teammates included, unless you turn **Ally proximity** off to hear your whole team at full volume everywhere. Computed on the server, so clients only ever receive `{ peerName: volume }`, never another peer's raw position.
 
-**Camera mode** (on by default since v0.5.24) replaces steps 2 and 5: your app reads which players' icons are inside your camera's white box on the minimap and plays exactly those, deciding it on your own PC and sending no position. **Voice on camera** (proximity mode) also lets you hear what is on your screen, one-way, and only between players who both have it on.
+**Camera mode** (on by default since v0.5.24) replaces steps 2 and 5: your app reads which players' icons are inside your camera's white box on the minimap and plays exactly those, deciding it on your own PC rather than on the server. **Voice on camera** (proximity mode) also lets you hear what is on your screen, one-way, and only between players who both have it on.
 
 Enemies are heard only while their icon is drawn on your minimap, so an enemy in a brush or in the fog stays silent (between players on v0.5.24 or later). [`docs/compliance.md`](docs/compliance.md) covers this and both camera settings in full.
 

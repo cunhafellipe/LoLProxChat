@@ -92,11 +92,11 @@ The client-side remnant of this idea — a peer-avoidance penalty in the tracker
 
 ### Camera mode is decided by the client (on by default since v0.5.24)
 
-- In camera mode a client hears the players whose minimap icons are inside its camera rectangle, enemies only while their icon is drawn, and no one else. The decision is made locally, from the client's own capture; the client sends the server no position and asks it for no volumes while the mode is on. On engaging it sends one plain disown (`coords` with `stale: true`, at 0,0, no sighting), which clears both its position and any `lastSeen` on the server.
+- In camera mode a client hears the players whose minimap icons are inside its camera rectangle, enemies only while their icon is drawn, and no one else. The decision is made locally, from the client's own capture; the client asks the server for no volumes while the mode is on, and disowns its position (`coords` with `stale: true`), so it is never scored as anyone's enemy. The disown carries the tracker's latest sighting of its own icon (`seen: true`), re-sent whenever that changes — every tick while the tracker follows it — and the server keeps it as `lastSeen`, which only ever enters the scoring of the player's own team (see "Zombie peers").
 - One leak by design: an enemy whose icon vanishes within ~0.7 icon widths of an ally's is assumed to be under it and stays audible for up to 6 s (`ENEMY_HIDDEN_NEAR_DIAMS`, `COVERED_MAX_MS` in `camera-hearing.ts`), so an enemy who steps into a brush right beside a teammate can be heard that long.
 - **What it reveals:** nothing the screen does not show, beyond the 6 s above. Every player it lets you hear has an icon in your view right now, and enemies in the fog have none. It is not mutual — a player in camera mode hears whoever is on their screen whatever that player's own settings — because the bound is the screen and the fog of war, not consent. See [`compliance.md`](compliance.md) § "Camera mode".
 - **What a modified client gains:** nothing beyond the section above. Camera mode adds no server data path, so there is nothing new to forge.
-- **Its effect on the server's data:** a camera-mode client contributes no position, so proximity clients cannot score it (enemies on proximity hear it at 0, teammates at the unplaced-ally 1.0), and the server holds less about it than about a proximity client.
+- **Its effect on the server's data:** the server holds about as much as for a proximity client — its tracked position, as `lastSeen`. Enemies on proximity hear it at 0; teammates on proximity score it at `lastSeen`, or at 1.0 once that is 20 s old.
 
 ### Fog of war on the server: `vis`, and the camera box
 
@@ -176,7 +176,7 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 **Status:** **Mitigated, on by default since v0.5.24.**
 
 - **Settings → Hide IP (Force TURN)** sets `iceTransportPolicy: 'relay'` on the RTCPeerConnection. Chromium then refuses to gather or use any non-relay candidate, so peers only ever see the TURN server's IP, never the user's public IP.
-- Default is **on** since v0.5.24 (it was off before). TURN relay adds ~20-100 ms latency and uses TURN bandwidth (Cloudflare's free tier), which was the reason it started off. Older versions stored nothing while it was off, so **updating turns it on for everyone**, including players who had it off; from v0.5.24 turning it off is stored and sticks.
+- Default is **on** since v0.5.24 (it was off before). TURN relay adds ~20-100 ms latency and uses TURN bandwidth (Cloudflare's free tier), which was the reason it started off. v0.5.24 also turns it on once for every install, including players who had it off; from then on, turning it off is stored and sticks.
 - Takes effect on the next peer connection (existing connections keep their original transport policy until re-established).
 - Only matters in matches where you don't already trust everyone. If you're queuing with a premade of friends, they're not the threat — but the other 8 players in the match could be, and the toggle is what protects you from them.
 - The protection is the client's own: with it off, your IP is exposed even to peers who have it on (they connect to your relay candidates only, but you gather and signal host and srflx candidates). The server does not force it.
@@ -273,7 +273,7 @@ Collisions between two *honest* players are not a practical concern: the name is
 
 **Status:** Bounded by an opt-in that both ends enforce, and by the message carrying nothing to act on.
 
-- **Off by default, and enforced on both sides.** The server relays a `reset` only to connections that declared the opt-in on join or since, and acts on a `reset_all` only from one that did. The client does not rely on that: with its own setting off it drops a `reset` unread (`SignalingService`), and the orchestrator checks the setting again before acting. So even a modified server that sent `reset` to everyone could not make a player who left the setting off rescan.
+- **On by default since v0.5.24, and enforced on both sides.** (It was off by default from v0.5.21; the v0.5.24 contribution switched it on, with a one-time pass that turns it on for existing installs too.) A player who turns it off is out of it entirely: the server relays a `reset` only to connections that declared the opt-in on join or since, and acts on a `reset_all` only from one that did. The client does not rely on that: with its own setting off it drops a `reset` unread (`SignalingService`), and the orchestrator checks the setting again before acting. So even a modified server that sent `reset` to everyone could not make a player who left the setting off rescan.
 - **Nothing in it is used but a name.** The relayed message is `{type:'reset', from}`. The client reads `from` only as a string and shows it only when it names a player already in the room; every other field is ignored. Receiving it means "rescan", and there is nothing else it can say.
 - **Rate-limited at both ends.** At most one relayed per 15 s per room and one per 30 s per player name on the server (so reconnecting does not reset it), and at most one acted on per 15 s by each client — so even a server that floods it cannot keep a client scanning.
 - **A rescan cannot be steered.** The receiving tracker acts only from a clean lock — not while holding (a recall, its icon covered), merged with a teammate, already scanning or dead, when it is re-finding the player already — then avoids nothing and takes an unidentified icon only within walking reach of where that lock was. So another player's RESET cannot move anyone's position across the map; at worst it costs them a few seconds of being team-only while they are found again, and, with a teammate standing within reach and nothing to tell the two apart, the same chance of picking the teammate as any rescan.
@@ -302,4 +302,4 @@ Collisions between two *honest* players are not a practical concern: the name is
 | WebView2 process trust | Accepted | Auto-updated by Microsoft Edge; small attack surface |
 | Signaling presence enumeration | Accepted | No mitigation without breaking peer-discovery |
 | Voice in transit | Standard DTLS-SRTP | Inherent to WebRTC |
-| Shared RESET abuse | **Mitigated (opt-in)** | Off by default; enforced by server and client; name-only payload; rate-limited both ends |
+| Shared RESET abuse | **Mitigated (opt-out since v0.5.24)** | On by default; turning it off is enforced by server and client; name-only payload; rate-limited both ends |

@@ -289,11 +289,7 @@ pub struct DeviceList {
 }
 
 /// Output devices as lolproxchat.exe sees them, for the panel's picker.
-///
-/// Every App audio command is `async` (run off the main thread): opening a
-/// device can take seconds and the mix arrives 100 times a second, neither of
-/// which may hold up the event loop every window shares.
-#[tauri::command(async)]
+#[tauri::command]
 pub fn audio_out_devices() -> DeviceList {
     let host = cpal::default_host();
     let devices = host
@@ -306,7 +302,7 @@ pub fn audio_out_devices() -> DeviceList {
 
 /// Start (or restart) playing on `device` (None: the Windows default).
 /// Returns the status, whose `sampleRate` the page must run its mix at.
-#[tauri::command(async)]
+#[tauri::command]
 pub fn audio_out_start(app: tauri::AppHandle, device: Option<String>) -> Result<Status, String> {
     let c = controller(&app);
     let (reply, rx) = mpsc::channel();
@@ -316,7 +312,7 @@ pub fn audio_out_start(app: tauri::AppHandle, device: Option<String>) -> Result<
 
 /// One chunk of the voice mix: little-endian mono f32 samples, as the raw
 /// request body.
-#[tauri::command(async)]
+#[tauri::command]
 pub fn audio_out_push(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected a raw body".into());
@@ -329,14 +325,14 @@ pub fn audio_out_push(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -
     Ok(())
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 pub fn audio_out_stop(app: tauri::AppHandle) {
     let c = controller(&app);
     c.shared.jitter.lock().unwrap().clear();
     let _ = c.tx.lock().unwrap().send(Cmd::Stop);
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 pub fn audio_out_status(app: tauri::AppHandle) -> Status {
     let c = controller(&app);
     let mut st = c.shared.status.lock().unwrap().clone();

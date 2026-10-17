@@ -245,8 +245,8 @@ describe('panel settings across sessions', () => {
       setAllyProximity(false);
       await jest.advanceTimersByTimeAsync(500);
       expect(changed()).toEqual([
-        '[LoLProxChat] Settings changed: cameraMode=true allyProximity=false voiceOnCamera=true sharedReset=false' +
-          ' (was cameraMode=true allyProximity=true voiceOnCamera=true sharedReset=false)',
+        '[LoLProxChat] Settings changed: cameraMode=true allyProximity=false voiceOnCamera=true sharedReset=true' +
+          ' (was cameraMode=true allyProximity=true voiceOnCamera=true sharedReset=true)',
       ]);
     } finally {
       clearStoredPrefs();
@@ -1022,22 +1022,6 @@ describe('camera mode', () => {
     await settle();
     expect(sendCoords.mock.calls.filter(c => c[2] !== true)).toHaveLength(0);
     expect(h.volumeCalls).toBe(before);
-  });
-
-  it('withdraws our position once, with no sighting, though the tracker goes on seeing us', async () => {
-    const { h } = await startCamera();
-    const sendCoords = (h.signaling as unknown as { sendCoords: jest.Mock }).sendCoords;
-    // The real tracker keeps locking on in camera mode, and its sighting is a
-    // new object every frame.
-    let n = 0;
-    Object.defineProperty(h.tracker, 'lastSeen', { get: () => ({ x: 6900 + n++, y: 7000 }), configurable: true });
-    show(h, [{ side: 'enemy', x: 140, y: 120, id: 'p1' }]);
-    await jest.advanceTimersByTimeAsync(1000);
-    await settle();
-    const stale = sendCoords.mock.calls.filter(c => c[2] === true);
-    expect(stale).toHaveLength(1); // the one sent when camera mode engaged
-    expect(stale[0].slice(0, 3)).toEqual([0, 0, true]);
-    expect(stale[0][4]).toBeUndefined();
   });
 
   it('goes back to proximity when the setting is turned off', async () => {

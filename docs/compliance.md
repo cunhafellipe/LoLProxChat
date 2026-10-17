@@ -62,7 +62,7 @@ What bounds it is the same as everything else here: the ~1350-unit hearing radiu
 
 Contributed in v0.5.24. With camera mode on — the default — you hear **exactly the players whose minimap icons are inside your camera rectangle**, and nobody else: not proximity, not voice on camera, not even a teammate standing beside your champion if your camera is elsewhere. Enemies are heard only while their icon is drawn on your minimap, so the fog of war applies (see above). Each icon is told apart by matching it against the ten players' base champion icons from Community Dragon, and followed from frame to frame.
 
-It is decided **on your own PC**, from your own minimap: your client withdraws its position from the server when it engages (one message carrying no place), sends none while it is on, and asks the server for no volumes. That makes it independent of finding your own icon, which is what made proximity fragile.
+It is decided **on your own PC**, from your own minimap: your client asks the server for no volumes while it is on, and gives it no position that enemies are scored against. It does keep reporting where its tracker last saw your own icon, as a "last seen" spot (the same one a lost proximity client sends), which the server uses only to score you for your own teammates. That makes it independent of finding your own icon, which is what made proximity fragile.
 
 **How it fits the argument above.** Everyone it lets you hear is on your screen right now: their champion is in your view, visible to you in the game. It reveals nobody the game hides — an enemy in a brush or the fog has no icon on your minimap — and it has no hearing range, because the bound is your screen.
 
@@ -70,7 +70,7 @@ One exception, by design: an enemy whose icon disappears right beside a teammate
 
 **It is one-way, and it is not mutual.** You hear someone when *their* icon is inside *your* camera box; they hear you when yours is inside theirs. Looking at someone never makes them hear you. But nothing on the other player's side is needed: a player in camera mode hears whoever is on their screen, including a player who has camera mode off, or an older version, and that player cannot opt out of being heard that way except by leaving the game's room. This is a deliberate difference from Voice on camera below, chosen because it is what makes the mode work for everyone at once; the limit is the screen and the fog of war rather than the other player's consent.
 
-**Mixing it with proximity.** A player in camera mode sends no position, so players still on proximity (camera mode off, or an older version) cannot score them: enemies on proximity do not hear them, and teammates on proximity hear them at full team volume, as for any teammate their app cannot place. Everyone in a game should use the same version and mode for it to work both ways.
+**Mixing it with proximity.** Players still on proximity (camera mode off, or an older version) cannot score a camera-mode player as an enemy: enemies on proximity do not hear them. Teammates on proximity hear them by distance from that "last seen" spot (with Ally proximity on), or at full volume when their tracker has not seen them for 20 seconds. Everyone in a game should use the same version and mode for it to work both ways.
 
 If you play ranked, consider turning it off: it hears more of the map than plain proximity does.
 

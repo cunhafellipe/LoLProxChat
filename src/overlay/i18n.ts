@@ -71,8 +71,8 @@ const STRINGS = {
   },
   'settings.appAudio': { en: 'App audio (OBS)', es: 'Audio por la app (OBS)' },
   'settings.appAudioHint': {
-    en: "When ON, the voices are played by lolproxchat.exe itself instead of the built-in browser, so OBS can capture them with Application Audio Capture → [lolproxchat.exe] on their own track. Output Device then lists the devices lolproxchat.exe sees. Use headphones: with speakers the others may hear themselves back. Off by default.",
-    es: "Si está activado, las voces las reproduce lolproxchat.exe en vez del navegador interno, y así OBS puede capturarlas con Captura de audio de aplicación → [lolproxchat.exe] en una pista aparte. Dispositivo de salida pasa a mostrar los dispositivos que ve lolproxchat.exe. Usa cascos: con altavoces los demás podrían oírse a sí mismos. Desactivado por defecto.",
+    en: "When ON, the voices are played by lolproxchat.exe itself instead of the built-in browser, so OBS can capture them with Application Audio Capture → [lolproxchat.exe] on their own track. Output Device then lists the devices lolproxchat.exe sees. Use headphones: with speakers the others may hear themselves back. On by default.",
+    es: "Si está activado, las voces las reproduce lolproxchat.exe en vez del navegador interno, y así OBS puede capturarlas con Captura de audio de aplicación → [lolproxchat.exe] en una pista aparte. Dispositivo de salida pasa a mostrar los dispositivos que ve lolproxchat.exe. Usa cascos: con altavoces los demás podrían oírse a sí mismos. Activado por defecto.",
   },
   'settings.cameraOnly': { en: 'Camera mode', es: 'Modo cámara' },
   'settings.cameraOnlyHint': {
@@ -97,8 +97,8 @@ const STRINGS = {
   'settings.reset': { en: 'RESET', es: 'REINICIAR' },
   'settings.sharedReset': { en: 'Shared RESET', es: 'REINICIAR compartido' },
   'settings.sharedResetHint': {
-    en: "When ON, pressing RESET also makes everyone else in the game who has this on find their champion on the minimap again, and their RESETs do the same for you. Off by default. Only works between players who have it on: leave it off and nobody's RESET reaches you. Either team can use it, at most once every 15 seconds per game.",
-    es: 'Si está activado, al pulsar REINICIAR también hace que todos los demás jugadores de la partida que lo tengan activado vuelvan a buscar a su campeón en el minimapa, y sus REINICIAR hacen lo mismo contigo. Viene desactivado por defecto. Solo funciona entre jugadores que lo tengan activado: si lo dejas desactivado, el REINICIAR de nadie te afecta. Funciona con los dos equipos, como mucho una vez cada 15 segundos por partida.',
+    en: "When ON, pressing RESET also makes everyone else in the game who has this on find their champion on the minimap again, and their RESETs do the same for you. On by default. Only works between players who have it on: leave it off and nobody's RESET reaches you. Either team can use it, at most once every 15 seconds per game.",
+    es: 'Si está activado, al pulsar REINICIAR también hace que todos los demás jugadores de la partida que lo tengan activado vuelvan a buscar a su campeón en el minimapa, y sus REINICIAR hacen lo mismo contigo. Viene activado por defecto. Solo funciona entre jugadores que lo tengan activado: si lo dejas desactivado, el REINICIAR de nadie te afecta. Funciona con los dos equipos, como mucho una vez cada 15 segundos por partida.',
   },
   'notice.sharedReset': {
     en: '{name} pressed RESET — finding you again',
