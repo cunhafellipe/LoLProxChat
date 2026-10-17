@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.5.24] — 2026-10-16
+
 Most of this release was contributed by a tester's friend, who reworked hearing around the camera and tested it in real games.
 
 ### Added
