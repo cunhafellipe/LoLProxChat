@@ -19,6 +19,7 @@ import {
   ChampionClassifier,
   packCropsToNCHW,
   localClassProbs,
+  teamSuppressedProbs,
 } from '../../src/services/champion-classifier';
 import labelMapRaw from '../../models/champion_labels.json';
 const labelMap: Record<string, string> = labelMapRaw as Record<string, string>;
@@ -140,6 +141,49 @@ describe('localClassProbs', () => {
   });
 });
 
+describe('teamSuppressedProbs', () => {
+  // 6 classes; the local champion is class 0, the team classes 0-2, and
+  // classes 3-5 are champions not in this game.
+  const LOCAL = 0;
+  const TEAM = [0, 1, 2];
+  const row = (...v: number[]) => new Float32Array(v);
+
+  test('leaves the score alone where our champion is the best team match', () => {
+    const r = row(3, 0, 0, 6, 0, 0);
+    expect(teamSuppressedProbs(r, 1, LOCAL, TEAM)[0]).toBeCloseTo(localClassProbs(r, 1, LOCAL)[0], 10);
+  });
+
+  test("drives a teammate's icon towards zero", () => {
+    const r = row(1, 6, 0, 0, 0, 0);
+    const [suppressed] = teamSuppressedProbs(r, 1, LOCAL, TEAM);
+    expect(suppressed).toBeLessThan(localClassProbs(r, 1, LOCAL)[0] / 100);
+  });
+
+  test('never raises a score above the all-classes one', () => {
+    // Every raw gate in the tracker was tuned on the all-classes scale.
+    for (let i = 0; i < 200; i++) {
+      const r = new Float32Array(Array.from({ length: 6 }, () => Math.random() * 10 - 5));
+      expect(teamSuppressedProbs(r, 1, LOCAL, TEAM)[0]).toBeLessThanOrEqual(localClassProbs(r, 1, LOCAL)[0] + 1e-12);
+    }
+  });
+
+  test('works row by row', () => {
+    const r = row(5, 1, 1, 0, 0, 0, /* | */ 1, 5, 1, 0, 0, 0);
+    const [ours, theirs] = teamSuppressedProbs(r, 2, LOCAL, TEAM);
+    expect(ours).toBeCloseTo(localClassProbs(r, 2, LOCAL)[0], 10);
+    expect(theirs).toBeLessThan(localClassProbs(r, 2, LOCAL)[1]);
+  });
+
+  test('adds the local class when the team list leaves it out, and ignores duplicates and -1', () => {
+    const r = row(1, 4, 1, 0, 0, 0);
+    expect(teamSuppressedProbs(r, 1, LOCAL, [1, 2, 2, -1])).toEqual(teamSuppressedProbs(r, 1, LOCAL, TEAM));
+  });
+
+  test('throws when a team class index is outside the row', () => {
+    expect(() => teamSuppressedProbs(new Float32Array(6), 1, LOCAL, [0, 9])).toThrow(/outside/);
+  });
+});
+
 describe('ChampionClassifier.scoreCrops', () => {
   type FakeTensor = { dims: number[]; data: Float32Array };
 
@@ -220,6 +264,21 @@ describe('ChampionClassifier.scoreCrops', () => {
     ].flat();
 
     batched.forEach((v, i) => expect(v).toBeCloseTo(singles[i], 10));
+  });
+
+  test("lowers a teammate's icon once the team is known, and not before", async () => {
+    // Crop 0 reads as class 0 (ours), crop 1 as class 1 (a teammate).
+    const makeLogits = (): FakeTensor => ({ dims: [2, 4], data: new Float32Array([5, 1, 0, 0, 1, 5, 0, 0]) });
+    const plain = withFakeSession(0, makeLogits).c;
+    const withTeam = withFakeSession(0, makeLogits).c;
+    (withTeam as unknown as { teamClassIndices: number[] }).teamClassIndices = [0, 1];
+
+    const crops = [solidCrop(1, 1, 1), solidCrop(2, 2, 2)];
+    const before = await plain.scoreCrops(crops);
+    const after = await withTeam.scoreCrops(crops);
+
+    expect(after[0]).toBeCloseTo(before[0], 10);
+    expect(after[1]).toBeLessThan(before[1] / 10);
   });
 
   test('returns zeros of the right length when the model is not loaded', async () => {

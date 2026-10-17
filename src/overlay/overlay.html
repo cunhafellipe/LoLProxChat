@@ -40,6 +40,10 @@
         </select>
       </div>
       <div class="setting-row">
+        <label data-i18n="settings.appAudio" data-i18n-title="settings.appAudioHint" title="When ON, the voices are played by lolproxchat.exe itself instead of the built-in browser, so OBS can capture them with Application Audio Capture → [lolproxchat.exe] on their own track. Output Device then lists the devices lolproxchat.exe sees. Use headphones: with speakers the others may hear themselves back. On by default.">App audio (OBS)</label>
+        <button id="btn-app-audio" class="icon-btn">ON</button>
+      </div>
+      <div class="setting-row">
         <label data-i18n="settings.inputMode">Input Mode</label>
         <select id="input-mode">
           <option value="always" data-i18n="settings.alwaysOpen">Always Open</option>
@@ -62,24 +66,28 @@
         </div>
       </div>
       <div class="setting-row">
-        <label data-i18n="settings.forceTurn" data-i18n-title="settings.forceTurnHint" title="Routes all voice through the TURN relay so peers never see your public IP. Adds ~20-100ms latency. Takes effect on next peer connection.">Hide IP (Force TURN)</label>
-        <button id="btn-force-turn" class="icon-btn">OFF</button>
+        <label data-i18n="settings.forceTurn" data-i18n-title="settings.forceTurnHint" title="Routes all voice through the TURN relay so peers never see your public IP. Adds ~20-100ms latency. Takes effect on next peer connection. On by default.">Hide IP (Force TURN)</label>
+        <button id="btn-force-turn" class="icon-btn">ON</button>
+      </div>
+      <div class="setting-row">
+        <label data-i18n="settings.cameraOnly" data-i18n-title="settings.cameraOnlyHint" title="When ON (default), you hear exactly the players whose icons are inside your camera's white box on the minimap, and nobody else: not even someone beside you if your camera is elsewhere. Enemies only while their icon is drawn on your minimap, so one in a brush or in the fog stays silent. Others hear you when YOUR icon is inside THEIR box: looking at someone never makes them hear you. Does not need the app to find your own icon. Overrides Ally proximity and Voice on camera while on. Everyone should use the same version for it to work both ways.">Camera mode</label>
+        <button id="btn-camera-only" class="icon-btn">ON</button>
       </div>
       <div class="setting-row">
         <label data-i18n="settings.allyProximity" data-i18n-title="settings.allyProximityHint" title="When ON (default), teammates fade with distance just like enemies. When OFF, teammates are always at full volume. Takes effect on the next position update.">Ally proximity</label>
-        <button id="btn-ally-proximity" class="icon-btn">OFF</button>
+        <button id="btn-ally-proximity" class="icon-btn">ON</button>
       </div>
       <div class="setting-row">
-        <label data-i18n="settings.cameraListen" data-i18n-title="settings.cameraListenHint" title="When ON, you also hear the map from wherever your camera is looking, not just from your champion. One-way: the people you listen in on only hear you if they are near your champion or looking at you themselves. Only works between players who BOTH have it on: leave it off and nobody's camera can reach you, only players actually near you on the map. On by default. It lets you hear enemies your champion could not see, so turn it off for plain proximity.">Voice on camera</label>
-        <button id="btn-camera-listen" class="icon-btn">OFF</button>
+        <label data-i18n="settings.cameraListen" data-i18n-title="settings.cameraListenHint" title="When ON, you also hear the champions inside your camera's white box on the minimap — what is on your screen — not just those near your champion. Enemies only while their icon is on your minimap, as everywhere: one in a brush or in the fog stays silent. One-way: the people you listen in on only hear you if they are near your champion or looking at you themselves. Only works between players who BOTH have it on: leave it off and nobody's Voice on camera can reach you. (Players in Camera mode still hear you while your icon is inside their camera box.) On by default.">Voice on camera</label>
+        <button id="btn-camera-listen" class="icon-btn">ON</button>
       </div>
       <div class="setting-row">
         <label data-i18n="settings.wrongPosition" data-i18n-title="settings.wrongPositionHint" title="If people near you can't hear you, the app may be tracking the wrong icon on your minimap (it can latch onto a ward you walked past). This drops the current position and finds your champion again; walk somewhere after pressing it so it can tell you apart. Until it finds you, only your team hears you.">Wrong position?</label>
         <button id="btn-reset-position" class="icon-btn">RESET</button>
       </div>
       <div class="setting-row">
-        <label data-i18n="settings.sharedReset" data-i18n-title="settings.sharedResetHint" title="When ON, pressing RESET also makes everyone else in the game who has this on find their champion on the minimap again, and their RESETs do the same for you. Off by default. Only works between players who have it on: leave it off and nobody's RESET reaches you. Either team can use it, at most once every 15 seconds per game.">Shared RESET</label>
-        <button id="btn-shared-reset" class="icon-btn">OFF</button>
+        <label data-i18n="settings.sharedReset" data-i18n-title="settings.sharedResetHint" title="When ON, pressing RESET also makes everyone else in the game who has this on find their champion on the minimap again, and their RESETs do the same for you. On by default. Only works between players who have it on: leave it off and nobody's RESET reaches you. Either team can use it, at most once every 15 seconds per game.">Shared RESET</label>
+        <button id="btn-shared-reset" class="icon-btn">ON</button>
       </div>
       <div class="setting-row">
         <label data-i18n="settings.debug">Debug</label>

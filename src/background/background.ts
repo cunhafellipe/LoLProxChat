@@ -9,10 +9,9 @@ import { isAutoUpdateEnabled } from '../services/updater';
 import { applyAudioDefaultsOnce } from '../services/audio-prefs';
 import '../core/window-globals';
 
-// Ally proximity and Voice on camera back on, once per install (see
-// audio-prefs). Before the orchestrator, whose first session logs them.
+// Every panel toggle back on, once per install (see audio-prefs). Before the orchestrator, whose first session logs them.
 if (applyAudioDefaultsOnce()) {
-  console.warn('[LoLProxChat] Ally proximity and Voice on camera set back to on (one time, for this version)');
+  console.warn('[LoLProxChat] Panel toggles set back to on (one time, for this version)');
 }
 
 console.log('[LoLProxChat] Background script loading...');
@@ -82,6 +81,12 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       break;
     case 'setOutputDevice':
       orchestrator.applyOutputDevice(payload.id);
+      break;
+    case 'setAppAudio':
+      void orchestrator.applyAppAudio(payload.enabled);
+      break;
+    case 'setAppAudioDevice':
+      void orchestrator.applyAppAudioDevice(payload.name);
       break;
     case 'openLogFolder':
       invoke('open_log_folder')

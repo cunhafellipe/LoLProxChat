@@ -98,6 +98,9 @@ export function makeClient(
       return audio;
     },
     createTracking: () => tracker as unknown as import('../../../src/services/tracking').TrackingService,
+    // No icon downloads in tests: Community Dragon is the network.
+    loadSkinTemplates: undefined,
+    loadBaseTemplates: undefined,
     createClassifier: async () => null,
     createVolumeClient: () => new VolumeClient(),
     // Fast enough that a test waits tens of milliseconds rather than seconds;

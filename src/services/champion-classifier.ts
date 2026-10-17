@@ -116,6 +116,53 @@ export function localClassProbs(
   return scores;
 }
 
+/**
+ * localClassProbs, lowered for crops the model reads as one of our TEAMMATES'
+ * champions: each row's all-classes local probability is multiplied by
+ * p_local / p_best, both taken from a softmax over the team's classes only.
+ *
+ * Every teal icon is one of our five teammates (us included), and Live Client
+ * Data tells us which champions those are, but the all-classes softmax cannot
+ * use that: a teammate's icon the model half-confuses with ours keeps a score
+ * that competes with our own. With the factor, an icon that is clearly a
+ * teammate's champion drops towards zero, while one where our champion is the
+ * best team match is untouched (factor 1).
+ *
+ * It only ever LOWERS a score, never raises one, so every raw-score gate in
+ * the tracker (MIN_RAW_THRESHOLD, FAR_REACQUIRE_MIN_RAW) stays at least as
+ * strict as before. Measured with the shipped model on rendered minimap crops
+ * of every champion in random teams of five (16-24px icons, blur, noise,
+ * overlapping icons): a teammate's icon out-scored ours 12.8% -> 8.7% of the
+ * time at 20px, and with our icon not on the map a teammate still cleared
+ * MIN_RAW_THRESHOLD 46.5% -> 27.2% of the time; our icon cleared the far
+ * re-acquire gate exactly as often as before.
+ *
+ * `teamClassIndices` may omit the local class or contain duplicates and -1
+ * (a teammate whose name did not resolve); both are tolerated.
+ */
+export function teamSuppressedProbs(
+  logits: Float32Array,
+  batchSize: number,
+  localClassIndex: number,
+  teamClassIndices: number[],
+): number[] {
+  const all = localClassProbs(logits, batchSize, localClassIndex);
+  const numClasses = logits.length / batchSize;
+  const team = [...new Set([localClassIndex, ...teamClassIndices.filter((i) => i !== -1)])];
+  for (const idx of team) {
+    if (idx < 0 || idx >= numClasses) {
+      throw new Error(`teamSuppressedProbs: class index ${idx} outside [0, ${numClasses})`);
+    }
+  }
+  return all.map((p, r) => {
+    const base = r * numClasses;
+    let best = -Infinity;
+    for (const idx of team) best = Math.max(best, logits[base + idx]);
+    // p_local / p_best over the team softmax is exp(l_local - l_best).
+    return p * Math.exp(logits[base + localClassIndex] - best);
+  });
+}
+
 /** A blob's crop box in capture-frame pixels, padded by the caller. */
 export interface BlobCropBox {
   cropX: number;
@@ -144,19 +191,33 @@ export class ChampionClassifier implements BlobScorer {
   private session: ort.InferenceSession | null = null;
   private labelMap: Record<string, string> = {};
   private localClassIndex = -1;
+  // Class indices of our team's champions (see teamSuppressedProbs). Fewer
+  // than two means the roster was unavailable: plain localClassProbs.
+  private teamClassIndices: number[] = [];
 
   // Reusable canvases for crop+resize (avoid GC churn). Both are created on
   // first use so the class stays constructible without a DOM.
   private srcCanvas: HTMLCanvasElement | null = null;
   private cropCanvas: HTMLCanvasElement | null = null;
 
-  async load(modelUrl: string, labelMapUrl: string, localChampionName: string): Promise<void> {
+  async load(
+    modelUrl: string,
+    labelMapUrl: string,
+    localChampionName: string,
+    teamChampionNames: string[] = [],
+  ): Promise<void> {
     console.log('[Classifier] Loading ONNX model:', modelUrl);
 
     const resp = await fetch(labelMapUrl);
     this.labelMap = await resp.json();
 
     this.localClassIndex = ChampionClassifier.resolveLocalClassIndex(this.labelMap, localChampionName);
+    this.teamClassIndices = teamChampionNames
+      .map((name) => ChampionClassifier.resolveLocalClassIndex(this.labelMap, name))
+      .filter((idx) => idx >= 0);
+    console.log('[Classifier] Team champions: ' + (teamChampionNames.join(', ') || '(none)') +
+      ' → ' + this.teamClassIndices.length + ' resolved' +
+      (this.teamClassIndices.length < 2 ? ' — not lowering teammate icons' : ''));
     if (this.localClassIndex >= 0) {
       console.log('[Classifier] Local champion:', localChampionName,
         '→ matched label "' + this.labelMap[String(this.localClassIndex)] + '"',
@@ -237,7 +298,10 @@ export class ChampionClassifier implements BlobScorer {
         numLabels);
     }
 
-    return localClassProbs(out.data as Float32Array, crops.length, this.localClassIndex);
+    const data = out.data as Float32Array;
+    return this.teamClassIndices.length >= 2
+      ? teamSuppressedProbs(data, crops.length, this.localClassIndex, this.teamClassIndices)
+      : localClassProbs(data, crops.length, this.localClassIndex);
   }
 
   /**

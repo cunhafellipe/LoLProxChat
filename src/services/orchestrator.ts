@@ -3,18 +3,27 @@ import { emit } from '@tauri-apps/api/event';
 import {
   GameStateService,
   GameSession,
+  LivePlayerState,
   SessionFailureReason,
   TauriGameState,
   localDeathState,
 } from './game-state';
-import { SignalingService, SignalMessage, PositionBroadcast } from './signaling';
+import { CameraReport, SignalingService, SignalMessage, PositionBroadcast } from './signaling';
 import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
 import { disownAfterSec } from './tracking-helpers';
 import { BlobScorer, ChampionClassifier } from './champion-classifier';
-import { SkinAwareScorer, TeammateSkin, TemplateSet, loadTeamTemplates } from './skin-matcher';
+import { PlayerChampion, SkinAwareScorer, TeammateSkin, TemplateSet, loadBaseTemplates, loadTeamTemplates } from './skin-matcher';
+import { CameraHearing } from './camera-hearing';
+import {
+  SPEAKING_LEVEL_REMOTE,
+  SPEAKING_LEVEL_SELF,
+  SpeakerEntry,
+  SpeakingTracker,
+  speakerLabel,
+} from './speakers';
 import { VolumeClient } from './volume-client';
-import { getAllyProximity, getCameraListen, getSharedReset } from './audio-prefs';
+import { getAllyProximity, getAppAudio, getAppAudioDevice, getCameraListen, getCameraOnly, getSharedReset } from './audio-prefs';
 import { getForceTurnRelay } from './privacy';
 import { DebugBundle } from './debug-bundle';
 import { flushLogBuffer, isLoggingEnabled } from '../core/logging';
@@ -67,11 +76,18 @@ export interface OrchestratorDeps {
   createSignaling(): SignalingService;
   createAudio(signaling: SignalingService, localName: string): AudioService;
   createTracking(gameRect: ScreenRect, mapType: MapType): TrackingService;
-  /** Resolves null when no scorer is available; tracking runs without one. */
-  createClassifier(championName: string): Promise<BlobScorer | null>;
+  /**
+   * Resolves null when no scorer is available; tracking runs without one.
+   * `teamChampionNames` is every champion on the local player's team (theirs
+   * included), which the classifier uses to lower teammates' icons.
+   */
+  createClassifier(championName: string, teamChampionNames: string[]): Promise<BlobScorer | null>;
   /** Teammates' minimap icons for this game (skin-matcher.ts). Optional: with
    *  none, identification is the classifier's alone. */
   loadSkinTemplates?(team: TeammateSkin[], signal: AbortSignal): Promise<TemplateSet[]>;
+  /** Every player's base minimap icon, for camera mode (camera-hearing.ts).
+   *  Optional: with none, camera mode never engages and proximity is used. */
+  loadBaseTemplates?(players: PlayerChampion[], signal: AbortSignal): Promise<TemplateSet[]>;
   createVolumeClient(): VolumeClient;
   timings: OrchestratorTimings;
 }
@@ -82,17 +98,19 @@ export function defaultDeps(): OrchestratorDeps {
     createSignaling: () => new SignalingService(),
     createAudio: (signaling, localName) => new AudioService(signaling, localName),
     createTracking: (gameRect, mapType) => new TrackingService(gameRect, mapType),
-    createClassifier: async (championName) => {
+    createClassifier: async (championName, teamChampionNames) => {
       const classifier = new ChampionClassifier();
       await classifier.load(
         '../models/champion_classifier.onnx',
         '../models/champion_labels.json',
         championName,
+        teamChampionNames,
       );
       return classifier;
     },
     createVolumeClient: () => new VolumeClient(),
     loadSkinTemplates: loadTeamTemplates,
+    loadBaseTemplates,
     // The volume tick is 10 Hz because GainNode smoothing turns those steps
     // into a ramp; the other two are housekeeping.
     timings: { gameStatePollMs: 3000, volumeTickMs: 100, configPollMs: 5000 },
@@ -139,6 +157,11 @@ export class Orchestrator {
   private lastSessionFailure:
     { sig: string; reason: SessionFailureReason; detail: string; at: number } | null = null;
   private peerStates: Map<string, PeerState> = new Map();
+  // The "who is speaking" overlay (speakers window, top-left of the game).
+  private speaking = new SpeakingTracker();
+  /** Each player's round champion icon, by roster id (`p<index>`). */
+  private cameraIconUrls = new Map<string, string>();
+  private lastSpeakersKey = '';
   private volumeTickId: number | null = null;
   // Fires at the respawn time League gave us when we died — see applyDeathState.
   private respawnTimerId: ReturnType<typeof setTimeout> | null = null;
@@ -150,6 +173,14 @@ export class Orchestrator {
   private configPollId: number | null = null;
   /** Cancels this game's teammate icon downloads when it ends. */
   private skinIconsAbort: AbortController | null = null;
+  /** Camera mode for this game, once every player's icon is in (or null). */
+  private cameraHearing: CameraHearing | null = null;
+  /** Peer name -> camera-mode player id ('p' + roster index), resolved once. */
+  private cameraIds: Map<string, string | null> = new Map();
+  /** What camera mode last played, for logging changes. */
+  private lastCameraHeard = '';
+  private lastCameraDead = '';
+  private lastCameraStatusMs = 0;
   private gameStatePollId: number | null = null;
   private positionTickRunning = false;
   private sessionActive = false;
@@ -250,6 +281,7 @@ export class Orchestrator {
       // lose the body for the rest of the timer.
       if (this.session && this.deathPollId === null) {
         this.applyDeathState(localDeathState(state.players, this.session.localPlayer));
+        this.applyCameraDeaths(state.players);
       }
 
       if (!state.isInGame) {
@@ -452,12 +484,14 @@ export class Orchestrator {
     // everyone had both opt-ins on from how the volumes behaved.
     // A diagnostic must never be what stops a session, storage or no storage.
     try {
-      console.log('[LoLProxChat] Settings: allyProximity=' + getAllyProximity() +
+      console.log('[LoLProxChat] Settings: cameraMode=' + getCameraOnly() +
+        ' allyProximity=' + getAllyProximity() +
         ' voiceOnCamera=' + getCameraListen() +
         ' sharedReset=' + getSharedReset() +
         ' hideIp=' + getForceTurnRelay() +
         ' inputDevice=' + (getStoredInputDeviceId() ? 'chosen' : 'default') +
-        ' outputDevice=' + (getStoredOutputDeviceId() ? 'chosen' : 'default'));
+        ' outputDevice=' + (getStoredOutputDeviceId() ? 'chosen' : 'default') +
+        ' appAudio=' + getAppAudio() + (getAppAudio() ? ' appAudioDevice=' + (getAppAudioDevice() ? 'chosen' : 'default') : ''));
       this.lastAudioToggles = this.audioToggles();
     } catch (e) {
       console.warn('[LoLProxChat] Settings unreadable:', e);
@@ -551,6 +585,7 @@ export class Orchestrator {
       // handles the path directly — closing an arbitrary-file-read attack
       // surface that v0.1.30 and earlier had via read_text_file.
 
+      this.placeSpeakers(resolved.rect);
       this.tracking = this.deps.createTracking(resolved.rect, session.mapType);
       this.tracking.loadChampionTemplate(session.localPlayer.championName);
       if (this.debugBundle) this.tracking.setDebugSink?.(this.debugBundle);
@@ -570,7 +605,7 @@ export class Orchestrator {
       const selfId = 'p' + all.indexOf(session.localPlayer);
       const scorer = new SkinAwareScorer(selfId, mates.map(p => 'p' + all.indexOf(p)));
       const tracking = this.tracking;
-      this.deps.createClassifier(session.localPlayer.championName).then((classifier) => {
+      this.deps.createClassifier(session.localPlayer.championName, mates.map(p => p.championName)).then((classifier) => {
         if (classifier && this.tracking === tracking) {
           scorer.setInner(classifier);
           tracking.setClassifier(scorer);
@@ -579,12 +614,14 @@ export class Orchestrator {
       }).catch(err => {
         console.warn('[LoLProxChat] Champion classifier failed to load (tracking continues without it):', err);
       });
-      // Every teammate's skin has to be known (and ours among them), or the
-      // icons are not fetched at all.
-      const team: TeammateSkin[] = mates.flatMap(p => (typeof p.skinId === 'number'
-        ? [{ id: 'p' + all.indexOf(p), championName: p.championName, rawChampionName: p.rawChampionName, skinId: p.skinId }]
-        : []));
-      if (this.deps.loadSkinTemplates && mates.length >= 2 && team.length === mates.length) {
+      // Matched against each teammate's BASE icon, whatever skin League says
+      // they wear: the minimap draws the base icon (2026-10-12 recordings:
+      // Soraka skin 16, Syndra 54 and Volibear 29 all drawn as their base
+      // icons). Matching the skin's own icon named the local player 0 times a
+      // minute there, and the tracker dropped its lock ~30 times a game.
+      const team: TeammateSkin[] = mates.map(p =>
+        ({ id: 'p' + all.indexOf(p), championName: p.championName, rawChampionName: p.rawChampionName, skinId: 0 }));
+      if (this.deps.loadSkinTemplates && mates.length >= 2) {
         const iconsAbort = new AbortController();
         this.skinIconsAbort?.abort();
         this.skinIconsAbort = iconsAbort;
@@ -595,8 +632,37 @@ export class Orchestrator {
           if (iconsAbort.signal.aborted) return;
           console.warn('[LoLProxChat] Teammate icons failed to load (the classifier carries on alone):', err);
         });
-      } else if (mates.length >= 2) {
-        console.log('[Skins] Not matching icons: League did not say which skin every teammate has on');
+      }
+
+      // Camera mode: every player's base icon, so the icons inside the camera
+      // box can be told apart. It takes over from proximity once they are in.
+      if (this.deps.loadBaseTemplates) {
+        const hearing = new CameraHearing();
+        const cameraAbort = this.skinIconsAbort ?? new AbortController();
+        this.skinIconsAbort = cameraAbort;
+        const players: PlayerChampion[] = all.map(p =>
+          ({ id: 'p' + all.indexOf(p), championName: p.championName, rawChampionName: p.rawChampionName }));
+        this.deps.loadBaseTemplates(players, cameraAbort.signal).then((sets) => {
+          if (this.tracking !== tracking) return;
+          hearing.setPlayers(all.map((p) => {
+            const id = 'p' + all.indexOf(p);
+            return {
+              id,
+              side: p.team === session.localPlayer.team ? 'ally' as const : 'enemy' as const,
+              self: p === session.localPlayer,
+              vecs: sets.find(s => s.id === id)?.vecs ?? [],
+              possesses: /viego/i.test(p.rawChampionName || p.championName),
+            };
+          }));
+          this.cameraHearing = hearing;
+          for (const s of sets) if (s.iconUrl) this.cameraIconUrls.set(s.id, s.iconUrl);
+          const missing = all.filter(p => !sets.some(s => s.id === 'p' + all.indexOf(p))).map(p => p.championName);
+          console.log('[Camera] Ready: icons for ' + sets.length + ' of ' + all.length + ' players' +
+            (missing.length ? ' (missing: ' + missing.join(', ') + ')' : ''));
+        }).catch(err => {
+          if (cameraAbort.signal.aborted) return;
+          console.warn('[Camera] Icons failed to load, proximity is used instead:', err);
+        });
       }
 
       // Read minimap scale from League config and apply before starting tracking
@@ -656,9 +722,48 @@ export class Orchestrator {
     this.positionTickRunning = true;
     try {
       await this.positionTickInner();
+      this.updateSpeakers();
     } finally {
       this.positionTickRunning = false;
     }
+  }
+
+  /** Puts the speaking overlay in the game's top-left corner (physical px). */
+  private placeSpeakers(game: ScreenRect): void {
+    invoke('position_speakers', { x: game.x + 16, y: game.y + 16 })
+      .catch((e) => console.warn('[Speakers] position_speakers failed:', e));
+  }
+
+  /**
+   * Who is speaking among the players we hear, and us: sent to the speakers
+   * window whenever the list changes. Each row is the champion's icon and
+   * "Summoner (Champion)".
+   */
+  private updateSpeakers(): void {
+    if (!this.audio || !this.session) return;
+    const levels = this.audio.getHeardVoiceLevels?.();
+    if (!levels) return;
+    levels.set('self', this.audio.getOwnVoiceLevel?.() ?? 0);
+    const keys = this.speaking.update(levels,
+      (key) => (key === 'self' ? SPEAKING_LEVEL_SELF : SPEAKING_LEVEL_REMOTE), performance.now());
+    const local = this.session.localPlayer;
+    const entries: SpeakerEntry[] = keys.flatMap((key): SpeakerEntry[] => {
+      if (key === 'self') {
+        const id = 'p' + this.session!.allPlayers.indexOf(local);
+        return [{ key, label: speakerLabel(this.localSummonerName, local.championName),
+          iconUrl: this.cameraIconUrls.get(id) ?? null, team: 'ally', self: true }];
+      }
+      const peer = this.peerStates.get(key);
+      if (!peer) return [];
+      const id = this.cameraIdFor(key);
+      return [{ key, label: speakerLabel(key, peer.championName),
+        iconUrl: (id && this.cameraIconUrls.get(id)) || null,
+        team: peer.team === local.team ? 'ally' : 'enemy', self: false }];
+    });
+    const sendKey = JSON.stringify(entries);
+    if (sendKey === this.lastSpeakersKey) return;
+    this.lastSpeakersKey = sendKey;
+    emit('speakers:update', { entries }).catch(() => { /* window not ready yet */ });
   }
 
   private async positionTickInner(): Promise<void> {
@@ -691,6 +796,20 @@ export class Orchestrator {
       const flat: Record<string, number> = {};
       for (const name of this.peerStates.keys()) flat[name] = 1.0;
       this.audio.applyPeerVolumes(flat);
+      this.broadcastOverlayState();
+      return;
+    }
+
+    // Camera mode: who is inside the camera box, read off our own minimap;
+    // no position of ours, no server. Proximity carries on until every
+    // player's icon is in, and whenever the setting is off.
+    const cameraOnly = getCameraOnly();
+    this.tracking.setCameraHearing?.(cameraOnly ? this.cameraHearing : null);
+    if (cameraOnly && this.cameraHearing?.hasPlayers()) {
+      // Peers on proximity score us from coordinates; camera mode sends none,
+      // and withdraws any sent before it engaged.
+      this.disownCoords();
+      this.applyCameraVolumes(this.cameraHearing);
       this.broadcastOverlayState();
       return;
     }
@@ -764,17 +883,24 @@ export class Orchestrator {
     // it reads as "the user turned the setting off" and would flicker the
     // feature off for a frame. It also matches what the user experiences: an
     // unreadable frame already falls back to hearing from the champion.
-    const camera = getCameraListen()
-      ? (this.tracking.getCameraPosition() ?? position)
+    //
+    // With the rectangle readable the whole box goes, not just its centre: the
+    // server then hears through the camera exactly the champions inside it.
+    const camera: CameraReport | null = getCameraListen()
+      ? (this.tracking.getCameraView() ?? this.tracking.getCameraPosition() ?? position)
       : null;
     this.logCameraListen(getCameraListen() ? this.tracking.getCameraPosition() : null);
 
     // Push our latest XY to server-side room state. /compute-volumes reads
     // every peer's stored position from there — no more P2P blob exchange.
+    // The enemy icons our minimap draws go with it on every report, camera or
+    // not: the server keeps enemies we cannot see (brush, fog) out of our
+    // audio, close or far.
     this.coordsDisowned = false;
     this.disownedWith = null;
     this.lostAnchor = null;
-    this.signaling.sendCoords(position.x, position.y, /*stale*/ false, camera);
+    this.signaling.sendCoords(position.x, position.y, /*stale*/ false, camera, undefined,
+      this.tracking.getVisibleEnemies());
 
     // Log our position whenever it moves >500 game units so we can see the
     // coordinates we're broadcasting (useful for verifying CV accuracy).
@@ -799,6 +925,77 @@ export class Orchestrator {
     }
 
     this.broadcastOverlayState();
+  }
+
+  /**
+   * Camera mode's volumes: full for every peer whose icon is inside the camera
+   * box, nothing for anyone else (omitted peers fade out). Logged when the set
+   * changes, and every 5 s with what the minimap shows, so a test game's log
+   * says who was heard and why.
+   */
+  private applyCameraVolumes(hearing: CameraHearing): void {
+    const now = performance.now();
+    const audible = hearing.audible(now);
+    const vols: Record<string, number> = {};
+    const heard: string[] = [];
+    for (const name of this.peerStates.keys()) {
+      const id = this.cameraIdFor(name);
+      if (id && audible.has(id)) {
+        vols[name] = 1.0;
+        heard.push(name);
+      }
+    }
+    this.audio?.applyPeerVolumes(vols);
+    const key = heard.sort().join(', ');
+    const box = hearing.getBox();
+    const boxStr = box ? box.x0 + ',' + box.y0 + '-' + box.x1 + ',' + box.y1 : 'none';
+    if (key !== this.lastCameraHeard) {
+      this.lastCameraHeard = key;
+      console.log('[Camera] Hearing: ' + (key || 'nobody') + ' | box ' + boxStr +
+        ' | icons ' + (hearing.describe(now) || 'none'));
+      // Debug on: a snapshot of the minimap at each change, to check who was
+      // heard against what was on it.
+      this.debugBundle?.markEvent('camera');
+    }
+    if (now - this.lastCameraStatusMs >= 5000) {
+      this.lastCameraStatusMs = now;
+      console.log('[Camera] Box ' + boxStr + ' | icons ' + (hearing.describe(now) || 'none') +
+        ' | audible ids ' + ([...audible].join(',') || 'none'));
+    }
+  }
+
+  /** Tells camera mode which players are dead (no icon, so never the unknown
+   *  icon in the box). Unreadable data leaves it as it was. */
+  private applyCameraDeaths(players: LivePlayerState[] | undefined): void {
+    if (!this.cameraHearing || !this.session || !players || players.length === 0) return;
+    const dead: string[] = [];
+    for (const p of players) {
+      if (!p.isDead) continue;
+      const identity = readIdentity(p);
+      const entry = identity ? this.rosterIdentities.find((r) => identityEquals(r.identity, identity)) : undefined;
+      const index = entry ? this.session.allPlayers.indexOf(entry.player) : -1;
+      if (index >= 0) dead.push('p' + index);
+    }
+    this.cameraHearing.setDead(dead);
+    const key = dead.join(',');
+    if (key !== this.lastCameraDead) {
+      this.lastCameraDead = key;
+      console.log('[Camera] Dead: ' + (key || 'none'));
+    }
+  }
+
+  /** The camera-mode id of a peer: their place in the roster, found by Riot
+   *  ID the way handlePeerPosition finds them (champion names are in each
+   *  client's own language, so they cannot be compared). null if not found. */
+  private cameraIdFor(name: string): string | null {
+    if (this.cameraIds.has(name)) return this.cameraIds.get(name)!;
+    const identity = readIdentity({ summonerName: name });
+    const entry = identity ? this.rosterIdentities.find((r) => identityEquals(r.identity, identity)) : undefined;
+    const index = entry && this.session ? this.session.allPlayers.indexOf(entry.player) : -1;
+    const id = index >= 0 ? 'p' + index : null;
+    if (!id) console.warn('[Camera] ' + name + ' is not on the roster, never heard in camera mode');
+    this.cameraIds.set(name, id);
+    return id;
   }
 
   /**
@@ -906,7 +1103,8 @@ export class Orchestrator {
 
   /** The panel toggles that change what we hear, as they read right now. */
   private audioToggles(): string {
-    return 'allyProximity=' + getAllyProximity() +
+    return 'cameraMode=' + getCameraOnly() +
+      ' allyProximity=' + getAllyProximity() +
       ' voiceOnCamera=' + getCameraListen() +
       ' sharedReset=' + getSharedReset();
   }
@@ -1204,6 +1402,9 @@ export class Orchestrator {
   }
   applyInputDevice(id: string | null): Promise<void> | void { return this.audio?.applyInputDevice(id); }
   applyOutputDevice(id: string | null): Promise<void> | void { return this.audio?.applyOutputDevice(id); }
+  /** Settings → "App audio (OBS)": voices played by lolproxchat.exe itself. */
+  applyAppAudio(enabled: boolean): Promise<void> | void { return this.audio?.setAppAudio(enabled); }
+  applyAppAudioDevice(name: string | null): Promise<void> | void { return this.audio?.setAppAudioDevice(name); }
 
   getSessionPlayers(): { summonerName: string; championName: string; team: string }[] {
     if (!this.session) return [];
@@ -1383,6 +1584,7 @@ export class Orchestrator {
     try {
       const players = await this.gameState.pollLivePlayers();
       if (this.session) this.applyDeathState(localDeathState(players, this.session.localPlayer));
+      this.applyCameraDeaths(players);
     } finally {
       this.deathPollRunning = false;
     }
@@ -1428,6 +1630,12 @@ export class Orchestrator {
 
     this.skinIconsAbort?.abort();
     this.skinIconsAbort = null;
+    this.cameraHearing = null;
+    this.cameraIds.clear();
+    this.lastCameraHeard = '';
+    this.lastCameraDead = '';
+    this.lastCameraStatusMs = 0;
+    this.tracking?.setCameraHearing?.(null);
     this.tracking?.setDebugSink?.(null);
     this.tracking?.stop();
     this.tracking = null;
@@ -1462,6 +1670,13 @@ export class Orchestrator {
 
     // Hide the scanner window so it doesn't float wherever the minimap last was
     invoke('hide_scanner').catch(() => { /* non-fatal */ });
+    // And the speaking overlay, emptied first so it does not show the last
+    // speakers when the next game brings it back.
+    this.speaking.reset();
+    this.cameraIconUrls.clear();
+    this.lastSpeakersKey = '';
+    emit('speakers:update', { entries: [] }).catch(() => { /* non-fatal */ });
+    invoke('hide_speakers').catch(() => { /* non-fatal */ });
 
     // Notify overlay that session ended
     window.dispatchEvent(new CustomEvent('sessionEnded'));

@@ -62,6 +62,9 @@ export class ScriptedTracker {
   loadChampionTemplate(_championName: string): void { /* colour filter, nothing to load */ }
   async initCaptureBounds(): Promise<void> { /* no backend to tell */ }
   setClassifier(c: unknown): void { this.classifierSet = true; this.classifier = c; }
+  /** Camera mode's reader, as the orchestrator hands it over (or null). */
+  cameraHearing: unknown = null;
+  setCameraHearing(h: unknown): void { this.cameraHearing = h; }
   setMinimapScaleFromConfig(scale: number): void { this.appliedMinimapScale = scale; }
   setMinimapRegion(_r: unknown): void { /* calibration is not exercised here */ }
 
@@ -84,6 +87,22 @@ export class ScriptedTracker {
   getLastSeenAgeMs(): number { return 0; }
   getCameraPosition(): Position | null {
     return this.cameraTrackingEnabled ? this.cameraPosition : null;
+  }
+  getCameraView(): { x: number; y: number; w: number; h: number } | null {
+    if (!this.cameraTrackingEnabled || !this.cameraPosition || !this.cameraSize) return null;
+    return { ...this.cameraPosition, ...this.cameraSize };
+  }
+  /** Size of the scripted camera box, or null for a centre-only camera. */
+  cameraSize: { w: number; h: number } | null = null;
+  /**
+   * Enemy icons the scripted minimap is drawing. Unscripted (undefined), the
+   * client reports none at all, as an older client would, and the server
+   * scores it without the fog-of-war check — which is what every test written
+   * before that check assumes.
+   */
+  visibleEnemies: Array<{ x: number; y: number; n: number }> | undefined = undefined;
+  getVisibleEnemies(): Array<{ x: number; y: number; n: number }> | undefined {
+    return this.visibleEnemies?.map(p => ({ ...p }));
   }
   setCameraTracking(enabled: boolean): void {
     this.cameraTrackingEnabled = enabled;
@@ -132,7 +151,13 @@ export class ScriptedTracker {
   }
 
   /** Point the in-game camera somewhere, for the voice-on-camera path (#36). */
-  lookAt(x: number, y: number): void {
+  lookAt(x: number, y: number, size?: { w: number; h: number }): void {
     this.cameraPosition = { x, y };
+    this.cameraSize = size ?? null;
+  }
+
+  /** Put enemy icons on the scripted minimap (what the player can see). */
+  sees(...points: Position[]): void {
+    this.visibleEnemies = points.map(p => ({ x: p.x, y: p.y, n: 1 }));
   }
 }

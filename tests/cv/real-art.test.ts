@@ -15,7 +15,7 @@
 import { TrackingState } from '../../src/services/tracking';
 import { driveTracker, newTracker } from './harness/drive';
 import { ZeroScorer } from './harness/scorers';
-import { ICON_DIAM, Point, SceneSpec, truthToGame } from './harness/scenes';
+import { ICON_DIAM, Point, SceneSpec, gameToTruth, truthToGame } from './harness/scenes';
 import { loadRealArt, renderReal } from './harness/real';
 
 const art = loadRealArt();
@@ -130,6 +130,37 @@ maybe('on the real minimap, with real portraits', () => {
     const { records } = await run([...walk, ...stand, ...gone]);
     expect(logs.some(covering)).toBe(false);
     expect(records[records.length - 1].holdSec).toBeGreaterThan(2);
+  });
+
+  test('visible enemies: real icons count once each, the map\'s red structures not at all', async () => {
+    // The fog-of-war check hears an enemy only while their icon is on our
+    // minimap. The real map is full of red turrets and inhibitor rings; if
+    // those counted, an enemy hiding in the fog beside their base would read
+    // as visible. With no enemy drawn the list must stay empty.
+    const walking = (over: SceneSpec) => Array.from({ length: 12 }, (_, i) => ({
+      ...AROUND, ...over, self: { x: 70 + i, y: 190 - i }, selfTrail: { x: -1, y: 1 },
+    }));
+    expect((await run(walking({ enemies: [] }))).h.svc.getVisibleEnemies()).toEqual([]);
+
+    // Enemies in open terrain, in the river and right beside their base.
+    const placed: Point[] = [{ x: 210, y: 70 }, { x: 140, y: 136 }, { x: 225, y: 100 }];
+    const seen = (await run(walking({ enemies: placed }))).h.svc.getVisibleEnemies();
+    for (const enemy of placed) {
+      expect(seen.some(p => distance(gameToTruth(p), enemy) <= 3 && p.n === 1)).toBe(true);
+    }
+    expect(seen).toHaveLength(placed.length);
+  });
+
+  test('visible enemies: a bot-lane duo whose icons merge counts as two', async () => {
+    for (const offset of [0.5, 0.3]) {
+      const a: Point = { x: 200, y: 220 };
+      const b: Point = { x: a.x + ICON_DIAM * offset, y: a.y - 2 };
+      const specs = Array.from({ length: 12 }, (_, i) => ({
+        ...AROUND, enemies: [a, b], self: { x: 70 + i, y: 190 - i }, selfTrail: { x: -1, y: 1 },
+      }));
+      const near = (await run(specs)).h.svc.getVisibleEnemies().filter(p => distance(gameToTruth(p), a) < ICON_DIAM);
+      expect(near.reduce((sum, p) => sum + p.n, 0)).toBe(2);
+    }
   });
 
   test('walking through the enemy base never starts an episode', async () => {

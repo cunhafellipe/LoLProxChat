@@ -34,7 +34,10 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   Orchestrator, OrchestratorDeps, defaultDeps, STATUS_MIC_BLOCKED, SHARED_RESET_RECEIVE_MS,
 } from '../../src/services/orchestrator';
-import { setAllyProximity, setSharedReset } from '../../src/services/audio-prefs';
+import { setAllyProximity, setCameraOnly, setSharedReset } from '../../src/services/audio-prefs';
+import { CameraHearing } from '../../src/services/camera-hearing';
+import { expectedBoxSize } from '../../src/services/camera-box';
+import type { CaptureFrame } from '../../src/core/capture-frame';
 import { AudioService } from '../../src/services/audio';
 import { GameStateService } from '../../src/services/game-state';
 import { SignalingService } from '../../src/services/signaling';
@@ -48,7 +51,7 @@ import { installWebAudioFakes } from '../e2e/fakes/webaudio';
 import { FakePeerConnection } from '../e2e/fakes/peer';
 import { ScriptedGameState, player } from '../e2e/fakes/game-state';
 import { ScriptedTracker } from '../e2e/fakes/tracker';
-import { SkinAwareScorer, TeammateSkin, TemplateSet } from '../../src/services/skin-matcher';
+import { PlayerChampion, SkinAwareScorer, TeammateSkin, TemplateSet } from '../../src/services/skin-matcher';
 import type { BlobScorer } from '../../src/services/champion-classifier';
 
 installDomShims();
@@ -120,6 +123,9 @@ function makeHarness(
     createSignaling: () => signaling as unknown as SignalingService,
     createAudio: () => audio as unknown as AudioService,
     createTracking: () => tracker as unknown as TrackingService,
+    // No icon downloads in tests: Community Dragon is the network.
+    loadSkinTemplates: undefined,
+    loadBaseTemplates: undefined,
     createClassifier: async () => null,
     createVolumeClient: () => ({
       computeVolumes: async () => {
@@ -239,8 +245,8 @@ describe('panel settings across sessions', () => {
       setAllyProximity(false);
       await jest.advanceTimersByTimeAsync(500);
       expect(changed()).toEqual([
-        '[LoLProxChat] Settings changed: allyProximity=false voiceOnCamera=true sharedReset=false' +
-          ' (was allyProximity=true voiceOnCamera=true sharedReset=false)',
+        '[LoLProxChat] Settings changed: cameraMode=true allyProximity=false voiceOnCamera=true sharedReset=true' +
+          ' (was cameraMode=true allyProximity=true voiceOnCamera=true sharedReset=true)',
       ]);
     } finally {
       clearStoredPrefs();
@@ -506,6 +512,7 @@ describe('the game-state poll', () => {
     });
 
     it('RESET asks the others to rescan only with the setting on', async () => {
+      setSharedReset(false);
       const h = await startInGame();
       const requestResetAll = (h.signaling as any).requestResetAll as jest.Mock;
       h.orchestrator.resetPosition();
@@ -552,6 +559,7 @@ describe('the game-state poll', () => {
     });
 
     it('a reset that arrives with the setting off does nothing', async () => {
+      setSharedReset(false);
       const h = await startInGame();
       h.tracker.moveTo(7000, 7000);
       await jest.advanceTimersByTimeAsync(300);
@@ -878,7 +886,9 @@ describe('teammate skin icons', () => {
     const { h, load } = await start(TEAM, model);
     expect(load).toHaveBeenCalledTimes(1);
     const team = load.mock.calls[0][0] as TeammateSkin[];
-    expect(team.map(p => [p.championName, p.skinId])).toEqual([['Kayn', 15], ['Briar', 0], ['Gwen', 11]]);
+    // Base icons whatever the skin: the minimap draws the base icon
+    // (2026-10-12 recordings), so Kayn's skin 15 and Gwen's 11 are asked as 0.
+    expect(team.map(p => [p.championName, p.skinId])).toEqual([['Kayn', 0], ['Briar', 0], ['Gwen', 0]]);
     // Told apart by roster position, not by summoner name (blank or repeated
     // in streamer mode) — so ids are distinct whatever the names are.
     expect(new Set(team.map(p => p.id)).size).toBe(3);
@@ -896,12 +906,12 @@ describe('teammate skin icons', () => {
     expect(new Set(team.map(p => p.id)).size).toBe(3);
   });
 
-  it('fetches nothing when a teammate\'s skin is unknown', async () => {
+  it('still fetches when a teammate\'s skin is unknown: only base icons are used', async () => {
     const roster = TEAM.map((p, i) => (i === 3 ? skin(p, undefined) : p));
     const { h, load } = await start(roster, model);
-    expect(load).not.toHaveBeenCalled();
-    // The classifier still goes in, matching nothing.
-    expect((h.tracker.classifier as SkinAwareScorer).isMatching()).toBe(false);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect((load.mock.calls[0][0] as TeammateSkin[]).every(p => p.skinId === 0)).toBe(true);
+    expect((h.tracker.classifier as SkinAwareScorer).isMatching()).toBe(true);
   });
 
   it('puts nothing in front of the tracker without the classifier', async () => {
@@ -933,5 +943,117 @@ describe('teammate skin icons', () => {
     await jest.advanceTimersByTimeAsync(3000);
     await settle();
     expect(signals[0].aborted).toBe(true);
+  });
+});
+
+describe('camera mode', () => {
+  // Us (Ahri, ORDER), an enemy, a teammate, another enemy. Camera-mode ids are
+  // roster places: p0 us, p1 Zed, p2 Lux, p3 Garen.
+  const CAST: Player[] = [
+    player('PlayerOne', 'LIFE', 'Ahri', 'ORDER'),
+    player('PlayerTwo', 'LIFE', 'Zed', 'CHAOS'),
+    player('PlayerThree', 'LIFE', 'Lux', 'ORDER'),
+    player('PlayerFour', 'LIFE', 'Garen', 'CHAOS'),
+  ];
+  const SIDE = 341;
+  const REGION = { x: 0, y: 0, width: SIDE, height: SIDE };
+  const FRAME = { data: new Uint8ClampedArray(SIDE * SIDE * 4), width: SIDE, height: SIDE } as unknown as CaptureFrame;
+
+  function boxMask(x0: number, y0: number): Uint8Array {
+    const { w, h } = expectedBoxSize(SIDE);
+    const m = new Uint8Array(SIDE * SIDE);
+    for (let x = x0; x <= x0 + w; x++) { m[y0 * SIDE + x] = 1; m[(y0 + h) * SIDE + x] = 1; }
+    for (let y = y0; y <= y0 + h; y++) { m[y * SIDE + x0] = 1; m[y * SIDE + x0 + w] = 1; }
+    return m;
+  }
+
+  async function startCamera(load = jest.fn(async (players: PlayerChampion[]) =>
+    players.map(p => ({ id: p.id, vecs: [new Float32Array(4)] })))): Promise<{ h: Harness; load: jest.Mock }> {
+    const h = makeHarness({}, CAST, { loadBaseTemplates: load });
+    h.orchestrator.start();
+    await settle();
+    (h.orchestrator as any).peerStates = new Map(CAST.slice(1).map(p => [p.summonerName,
+      { summonerName: p.summonerName, championName: p.championName, team: p.team, isMuted: false, isDead: false }]));
+    await jest.advanceTimersByTimeAsync(200);
+    await settle();
+    return { h, load };
+  }
+
+  /** What the minimap shows: the camera box at (100,100), these icons. */
+  function show(h: Harness, icons: Array<{ side: 'ally' | 'enemy'; x: number; y: number; id: string }>): void {
+    const hearing = h.tracker.cameraHearing as CameraHearing;
+    const now = performance.now();
+    hearing.onFrame(FRAME, REGION, [], [], boxMask(100, 100), now);
+    hearing.ingest(icons.map(i => ({ ...i })), now);
+  }
+
+  const lastVolumes = (h: Harness): Record<string, number> => {
+    const calls = h.audio.applyPeerVolumes.mock.calls;
+    return calls[calls.length - 1][0];
+  };
+
+  it('loads every player\'s base icon, both teams, us included', async () => {
+    const { load } = await startCamera();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect((load.mock.calls[0][0] as PlayerChampion[]).map(p => [p.id, p.championName]))
+      .toEqual([['p0', 'Ahri'], ['p1', 'Zed'], ['p2', 'Lux'], ['p3', 'Garen']]);
+  });
+
+  it('hears exactly the players whose icons are inside the camera box', async () => {
+    const { h } = await startCamera();
+    expect(h.tracker.cameraHearing).toBeInstanceOf(CameraHearing);
+    show(h, [
+      { side: 'enemy', x: 140, y: 120, id: 'p1' }, // Zed, in the box
+      { side: 'ally', x: 300, y: 300, id: 'p2' }, // Lux, far away
+      { side: 'enemy', x: 20, y: 20, id: 'p3' }, // Garen, far away
+    ]);
+    await jest.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(lastVolumes(h)).toEqual({ 'PlayerTwo#LIFE': 1.0 });
+  });
+
+  it('sends no coordinates of ours and asks the server for no volumes', async () => {
+    const { h } = await startCamera();
+    const sendCoords = (h.signaling as unknown as { sendCoords: jest.Mock }).sendCoords;
+    sendCoords.mockClear();
+    const before = h.volumeCalls;
+    show(h, [{ side: 'enemy', x: 140, y: 120, id: 'p1' }]);
+    await jest.advanceTimersByTimeAsync(1000);
+    await settle();
+    expect(sendCoords.mock.calls.filter(c => c[2] !== true)).toHaveLength(0);
+    expect(h.volumeCalls).toBe(before);
+  });
+
+  it('goes back to proximity when the setting is turned off', async () => {
+    const { h } = await startCamera();
+    setCameraOnly(false);
+    try {
+      const before = h.volumeCalls;
+      await jest.advanceTimersByTimeAsync(500);
+      await settle();
+      expect(h.volumeCalls).toBeGreaterThan(before);
+      expect(h.tracker.cameraHearing).toBeNull();
+    } finally {
+      setCameraOnly(true);
+    }
+  });
+
+  it('uses proximity until the icons are in, and if they never come', async () => {
+    const load = jest.fn(async () => { throw new Error('offline'); });
+    const { h } = await startCamera(load as unknown as jest.Mock);
+    const before = h.volumeCalls;
+    await jest.advanceTimersByTimeAsync(500);
+    await settle();
+    expect(h.volumeCalls).toBeGreaterThan(before);
+  });
+
+  it('never hears a peer it cannot place on the roster', async () => {
+    const { h } = await startCamera();
+    (h.orchestrator as any).peerStates.set('Stranger#XX',
+      { summonerName: 'Stranger#XX', championName: 'Zed', team: 'CHAOS', isMuted: false, isDead: false });
+    show(h, [{ side: 'enemy', x: 140, y: 120, id: 'p1' }]);
+    await jest.advanceTimersByTimeAsync(200);
+    await settle();
+    expect(lastVolumes(h)['Stranger#XX']).toBeUndefined();
   });
 });

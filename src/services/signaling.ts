@@ -26,6 +26,22 @@ export interface PositionBroadcast {
   isDead: boolean;
 }
 
+/** Our camera for "voice on camera": its centre, and its size when the
+ *  rectangle was readable (game units). */
+export interface CameraReport {
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+}
+
+/** An enemy icon our minimap is drawing (game units), holding `n` champions. */
+export interface VisibleEnemyReport {
+  x: number;
+  y: number;
+  n: number;
+}
+
 type OnPeerPosition = (peer: PositionBroadcast) => void;
 type OnSignal = (signal: SignalMessage) => void;
 type OnPeerLeave = (summonerName: string) => void;
@@ -250,10 +266,17 @@ export class SignalingService {
    * With `stale`, `seenAgoMs` says x/y are where we last actually saw
    * ourselves, that long ago: the server scores our teammates against it for
    * a short while. Without it the server forgets any such place.
+   *
+   * `visible` is the enemy icons our minimap is drawing (`vis`), so the
+   * server can keep enemies the fog of war hides from us out of our audio.
+   * The camera's size (`cw`/`ch`) lets it score the camera as the box on our
+   * screen rather than its centre. Both are additions: a server that predates
+   * them ignores them and scores us exactly as before.
    */
   sendCoords(
     x: number, y: number, stale = false,
-    camera?: { x: number; y: number } | null, seenAgoMs?: number,
+    camera?: CameraReport | null, seenAgoMs?: number,
+    visible?: VisibleEnemyReport[],
   ): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
     if (stale) {
@@ -262,9 +285,21 @@ export class SignalingService {
         : { type: 'coords', x, y, stale: true }));
       return;
     }
-    this.ws.send(JSON.stringify(camera
-      ? { type: 'coords', x, y, cx: camera.x, cy: camera.y }
-      : { type: 'coords', x, y }));
+    const msg: Record<string, unknown> = { type: 'coords', x, y };
+    if (camera) {
+      msg.cx = camera.x;
+      msg.cy = camera.y;
+      if (camera.w !== undefined && camera.h !== undefined) {
+        msg.cw = Math.round(camera.w);
+        msg.ch = Math.round(camera.h);
+      }
+    }
+    if (visible) {
+      msg.vis = visible.map((v) => v.n > 1
+        ? [Math.round(v.x), Math.round(v.y), v.n]
+        : [Math.round(v.x), Math.round(v.y)]);
+    }
+    this.ws.send(JSON.stringify(msg));
   }
 
   /**

@@ -20,6 +20,10 @@ windows = { version = "0.58", features = [
   "Win32_Foundation",
 ] }
 
+# "App audio" (audio_out.rs): the voices played by lolproxchat.exe itself, so OBS
+# can capture them as this application.
+cpal = "0.15"
+
 # Per-game debug bundles (game_bundle.rs).
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Same versions wry 0.54 builds against, so the webview handle's COM types match.

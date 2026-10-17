@@ -1,6 +1,7 @@
 import { setLoggingEnabled } from '../core/logging';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { listAppOutputDevices } from '../services/app-audio-output';
 import {
   checkForUpdate,
   downloadAndApply,
@@ -18,6 +19,8 @@ import {
 import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
 import {
   getAllyProximity, setAllyProximity, getCameraListen, setCameraListen, getSharedReset, setSharedReset,
+  getCameraOnly, setCameraOnly,
+  getAppAudio, setAppAudio, getAppAudioDevice, setAppAudioDevice,
   applyAudioDefaultsOnce,
 } from '../services/audio-prefs';
 import { computeDesiredHeight, shouldSendSize } from './resize-helpers';
@@ -192,9 +195,28 @@ async function refreshDeviceLists(): Promise<void> {
     }
     populateDeviceSelect(inputDeviceSelect, inputs, getStoredInputDeviceId());
     populateDeviceSelect(outputDeviceSelect, outputs, getStoredOutputDeviceId());
+    if (getAppAudio()) await populateAppOutputs();
   } catch (e) {
     console.warn('[Overlay] device enumeration failed:', e);
   }
+}
+
+/** App audio on: Output Device lists what lolproxchat.exe itself can play on
+ *  (Rust's own list, by name), so what is picked is exactly what plays. */
+async function populateAppOutputs(): Promise<void> {
+  const { devices } = await listAppOutputDevices();
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = t('settings.default');
+  const opts = [defaultOpt, ...devices.map((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    return opt;
+  })];
+  outputDeviceSelect.replaceChildren(...opts);
+  const chosen = getAppAudioDevice();
+  outputDeviceSelect.value = chosen && devices.includes(chosen) ? chosen : '';
 }
 
 function populateDeviceSelect(
@@ -223,9 +245,32 @@ inputDeviceSelect.addEventListener('change', () => {
 });
 
 outputDeviceSelect.addEventListener('change', () => {
+  if (getAppAudio()) {
+    const name = outputDeviceSelect.value || null;
+    setAppAudioDevice(name);
+    sendToBackground('setAppAudioDevice', { name });
+    return;
+  }
   const id = outputDeviceSelect.value || null;
   setStoredOutputDeviceId(id);
   sendToBackground('setOutputDevice', { id });
+});
+
+// App audio (OBS): voices played by lolproxchat.exe itself. Applied live; the
+// output picker switches to lolproxchat.exe's own device list while on.
+const btnAppAudio = document.getElementById('btn-app-audio') as HTMLButtonElement;
+function syncAppAudioButton(): void {
+  const on = getAppAudio();
+  btnAppAudio.textContent = onOff(on);
+  btnAppAudio.classList.toggle('active', on);
+}
+queueMicrotask(syncAppAudioButton);
+btnAppAudio.addEventListener('click', () => {
+  const enabled = !getAppAudio();
+  setAppAudio(enabled);
+  syncAppAudioButton();
+  void refreshDeviceLists();
+  sendToBackground('setAppAudio', { enabled });
 });
 
 // Refresh if user plugs / unplugs a device while the panel is open
@@ -346,6 +391,20 @@ queueMicrotask(syncCameraListenButton);
 btnCameraListen.addEventListener('click', () => {
   setCameraListen(!getCameraListen());
   syncCameraListenButton();
+});
+
+// Camera mode (camera-hearing.ts): hear exactly who is inside the camera box.
+// Read fresh on every volume tick, so flipping it takes effect within 100 ms.
+const btnCameraOnly = document.getElementById('btn-camera-only') as HTMLButtonElement;
+function syncCameraOnlyButton(): void {
+  const on = getCameraOnly();
+  btnCameraOnly.textContent = onOff(on);
+  btnCameraOnly.classList.toggle('active', on);
+}
+queueMicrotask(syncCameraOnlyButton);
+btnCameraOnly.addEventListener('click', () => {
+  setCameraOnly(!getCameraOnly());
+  syncCameraOnlyButton();
 });
 
 // Shared RESET (opt-in, off by default): see audio-prefs.ts.
@@ -806,6 +865,8 @@ function applyLanguage(): void {
   syncForceTurnButton();
   syncAllyProximityButton();
   syncCameraListenButton();
+  syncCameraOnlyButton();
+  syncAppAudioButton();
   syncSharedResetButton();
   btnDebug.textContent = onOff(debugEnabled);
   for (const relabel of bindRelabelers) relabel();

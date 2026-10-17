@@ -2,6 +2,8 @@ import { PeerConnection } from './peer-connection';
 import { SignalingService, SignalMessage } from './signaling';
 import { AudioSettings } from '../core/types';
 import { getStoredInputDeviceId, getStoredOutputDeviceId } from './devices';
+import { AppAudioOutput } from './app-audio-output';
+import { getAppAudio, getAppAudioDevice } from './audio-prefs';
 
 function peakRms(buf: Float32Array): number {
   let sumSq = 0;
@@ -244,6 +246,8 @@ export class AudioService {
     // Attach analysers to monitor whether the mic is actually producing audio
     // and whether the WebRTC-output stream contains audio. Reported every 2s.
     this.startAudioLevelMonitor(destination);
+
+    if (getAppAudio()) await this.setAppAudio(true);
   }
 
   private micError: string | null = null;
@@ -382,6 +386,7 @@ export class AudioService {
       }
       void peer.setOutputDevice(getStoredOutputDeviceId());
       this.peers.set(remoteName, peer);
+      if (this.appOut) peer.setAppOutput(this.appOut);
 
       if (this.outputStream) {
         peer.addLocalStream(this.outputStream);
@@ -701,6 +706,35 @@ export class AudioService {
     }
   }
 
+  /**
+   * Voice level (0..1) of every connected peer we can actually hear right now:
+   * a volume above 0 and not muted. Peers we cannot hear are left out, so the
+   * speaking overlay only ever shows a voice that is coming out of the speakers.
+   */
+  getHeardVoiceLevels(): Map<string, number> {
+    const out = new Map<string, number>();
+    if (this.muteAll) return out;
+    for (const [name, peer] of this.peers) {
+      if (this.mutedPlayers.has(name)) continue;
+      const vol = computeFinalPeerVolume(this.lastProximityVolumes.get(name) ?? 0, this.settings.playerVolumes[name] ?? 1.0);
+      if (vol <= 0) continue;
+      out.set(name, peer.getAudioLevel?.() ?? 0);
+    }
+    return out;
+  }
+
+  private ownLevelBuf: Float32Array<ArrayBuffer> | null = null;
+
+  /** Our microphone's level (RMS, 0..1) while it is actually being sent, else 0. */
+  getOwnVoiceLevel(): number {
+    if (!this.micLevelAnalyser || !this.isTransmitting()) return 0;
+    if (!this.ownLevelBuf || this.ownLevelBuf.length !== this.micLevelAnalyser.fftSize) {
+      this.ownLevelBuf = new Float32Array(this.micLevelAnalyser.fftSize);
+    }
+    this.micLevelAnalyser.getFloatTimeDomainData(this.ownLevelBuf);
+    return peakRms(this.ownLevelBuf);
+  }
+
   isSelfMuted(): boolean { return this.selfMuted; }
   isMuteAll(): boolean { return this.muteAll; }
   isPlayerMuted(name: string): boolean { return this.mutedPlayers.has(name); }
@@ -796,6 +830,50 @@ export class AudioService {
     }
   }
 
+  // ---- App audio: voices played by lolproxchat.exe (app-audio-output.ts) ----
+
+  private appOut: AppAudioOutput | null = null;
+  private appOutStarting: Promise<void> | null = null;
+
+  /**
+   * Turn app audio on or off, live: every peer moves between playing in the
+   * browser and playing through lolproxchat.exe. If app audio cannot start, or fails
+   * later, the voices stay in (or go back to) the browser, so nobody is left
+   * hearing nothing.
+   */
+  async setAppAudio(enabled: boolean): Promise<void> {
+    await this.appOutStarting;
+    if (this.disposed) return;
+    if (enabled && !this.appOut) {
+      this.appOutStarting = (async () => {
+        const out = new AppAudioOutput((reason) => {
+          if (this.appOut !== out) return;
+          console.warn('[Audio] App audio failed (' + reason + ') — voices back in the browser');
+          this.appOut = null;
+          for (const peer of this.peers.values()) peer.setAppOutput(null);
+        });
+        if (!(await out.start(getAppAudioDevice()))) return;
+        if (this.disposed) { await out.stop(); return; }
+        this.appOut = out;
+        for (const peer of this.peers.values()) peer.setAppOutput(out);
+        console.log('[Audio] App audio on for ' + this.peers.size + ' peer(s)');
+      })();
+      await this.appOutStarting;
+      this.appOutStarting = null;
+    } else if (!enabled && this.appOut) {
+      const out = this.appOut;
+      this.appOut = null;
+      for (const peer of this.peers.values()) peer.setAppOutput(null);
+      await out.stop();
+      console.log('[Audio] App audio off — voices back in the browser');
+    }
+  }
+
+  /** The app-audio device changed in Settings (a name from its own list). */
+  async setAppAudioDevice(name: string | null): Promise<void> {
+    await this.appOut?.setDevice(name);
+  }
+
   async applyOutputDevice(_id: string | null): Promise<void> {
     if (!this.audioContext) {
       console.log('[Audio] applyOutputDevice: not initialized yet, will pick up on next session');
@@ -833,6 +911,9 @@ export class AudioService {
       peer.close();
     }
     this.peers.clear();
+    const appOut = this.appOut;
+    this.appOut = null;
+    void appOut?.stop();
     this.outputStream?.getTracks().forEach((t) => t.stop());
     this.outputStream = null;
     this.localStream?.getTracks().forEach((t) => t.stop());

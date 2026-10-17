@@ -12,6 +12,7 @@ module.exports = {
     background: './src/background/background.ts',
     overlay: './src/overlay/overlay.ts',
     scanner: './src/scanner/scanner.ts',
+    speakers: './src/speakers/speakers.ts',
   },
   module: {
     rules: [
@@ -42,6 +43,8 @@ module.exports = {
         { from: 'src/overlay/overlay.css', to: 'overlay/' },
         { from: 'src/scanner/scanner.html', to: 'scanner/' },
         { from: 'src/scanner/scanner.css', to: 'scanner/' },
+        { from: 'src/speakers/speakers.html', to: 'speakers/' },
+        { from: 'src/speakers/speakers.css', to: 'speakers/' },
         // Champion classifier model + labels
         { from: 'models/champion_classifier.onnx', to: 'models/' },
         { from: 'models/champion_labels.json', to: 'models/' },

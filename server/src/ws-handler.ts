@@ -2,7 +2,7 @@ import type { WebSocket } from 'ws';
 import type { ClientMessage, ServerMessage } from './types.js';
 import type { RoomManager } from './rooms.js';
 import type { LivenessTracker } from './heartbeat.js';
-import { validateJoin } from './validate.js';
+import { parseCameraSize, parseVisibleIcons, validateJoin } from './validate.js';
 import { TokenBucket, LIMITS, type RejectReason } from './rate-limit.js';
 
 /** A shared RESET is relayed at most once per this long in a room... */
@@ -268,10 +268,14 @@ export function handleConnection(
           // otherwise reporting fine.
           if (typeof msg.cx === 'number' && typeof msg.cy === 'number' &&
               isFinite(msg.cx) && isFinite(msg.cy)) {
-            rooms.setCamera(ws, msg.cx, msg.cy);
+            rooms.setCamera(ws, msg.cx, msg.cy, parseCameraSize(msg.cw, msg.ch));
           } else {
             rooms.clearCamera(ws);
           }
+          // The enemy icons this client can see (fog of war). Replaced on every
+          // report; a report without a list (an older client) clears it, and
+          // that client is scored without the check, as before.
+          rooms.setVisible(ws, parseVisibleIcons(msg.vis));
           break;
         }
 

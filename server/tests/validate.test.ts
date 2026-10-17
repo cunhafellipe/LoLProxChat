@@ -1,5 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { validateJoin, MAX_NAME_LEN } from '../src/validate.js';
+import {
+  validateJoin, MAX_NAME_LEN, parseCameraSize, parseVisibleIcons, MAX_CAMERA_SPAN, MAX_VISIBLE_ICONS,
+  MAX_CAMERA_WIDTH, MAX_CAMERA_HEIGHT,
+} from '../src/validate.js';
+
+describe('parseCameraSize', () => {
+  it('reads a well-formed size', () => {
+    expect(parseCameraSize(2400, 1350)).toEqual({ w: 2400, h: 1350 });
+  });
+  it('is undefined for a missing or malformed size, so the centre rule applies', () => {
+    expect(parseCameraSize(undefined, undefined)).toBeUndefined();
+    expect(parseCameraSize(2400, undefined)).toBeUndefined();
+    expect(parseCameraSize('2400', 1350)).toBeUndefined();
+    expect(parseCameraSize(0, 1350)).toBeUndefined();
+    expect(parseCameraSize(-5, 1350)).toBeUndefined();
+    expect(parseCameraSize(Infinity, 1350)).toBeUndefined();
+    expect(parseCameraSize(MAX_CAMERA_SPAN + 1, 1350)).toBeUndefined();
+  });
+  it('fits a 16:9 and a 21:9 screen\'s box, and clamps anything bigger to them', () => {
+    // 85/341 x 47/341 of Summoner's Rift (14870 x 14980), and 21:9's width.
+    expect(parseCameraSize(3707, 2065)).toEqual({ w: 3707, h: 2065 });
+    expect(parseCameraSize(4865, 2065)).toEqual({ w: 4865, h: 2065 });
+    // A modified client claiming the whole map gets a screen's worth.
+    expect(parseCameraSize(15000, 15000)).toEqual({ w: MAX_CAMERA_WIDTH, h: MAX_CAMERA_HEIGHT });
+  });
+});
+
+describe('parseVisibleIcons', () => {
+  it('reads [x, y] and [x, y, n] entries', () => {
+    expect(parseVisibleIcons([[1, 2], [3, 4, 2]])).toEqual([{ x: 1, y: 2, n: 1 }, { x: 3, y: 4, n: 2 }]);
+  });
+  it('is undefined without a list (an older client), and [] for an empty one', () => {
+    expect(parseVisibleIcons(undefined)).toBeUndefined();
+    expect(parseVisibleIcons('nope')).toBeUndefined();
+    expect(parseVisibleIcons([])).toEqual([]);
+  });
+  it('drops malformed entries one by one', () => {
+    expect(parseVisibleIcons([[1, 2], [1], ['a', 2], null, [NaN, 1], [5, 6, 0], [5, 6, 1.5], [5, 6, 9], [7, 8]]))
+      .toEqual([{ x: 1, y: 2, n: 1 }, { x: 7, y: 8, n: 1 }]);
+  });
+  it('caps the list', () => {
+    expect(parseVisibleIcons(Array.from({ length: 50 }, (_, i) => [i, i]))).toHaveLength(MAX_VISIBLE_ICONS);
+  });
+});
 
 describe('validateJoin', () => {
   it('accepts a normal room id and Riot ID', () => {

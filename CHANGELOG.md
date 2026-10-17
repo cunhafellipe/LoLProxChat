@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+Most of this release was contributed by a tester's friend, who reworked hearing around the camera and tested it in real games.
+
+### Added
+- **Camera mode (Settings, on by default).** You hear exactly the players whose icons are inside your camera's white box on the minimap, and nobody else, not even someone beside you if your camera is elsewhere. Enemies are heard only while their icon is drawn on your minimap, so one in a brush or in the fog stays silent. Others hear you when your icon is inside *their* box: looking at someone never makes them hear you. It does not need the app to find your own icon, which is what most tracking problems came from. While it is on, it replaces Ally proximity and Voice on camera. Everyone in the game should be on this version for it to work both ways: enemies still on proximity do not hear you at all. An enemy whose icon disappears right beside a teammate's is taken to be under it and stays audible for up to 6 seconds, even if they actually stepped into a brush. Details and what it means for fair play in `docs/compliance.md`.
+- **Who is speaking.** A small list in the top-left corner of the game shows each player as they talk, with their champion icon: only players you can hear, and you.
+- **App audio (OBS) (Settings, on by default).** Plays the voices from lolproxchat.exe itself instead of the built-in browser, so OBS's Application Audio Capture can put them on their own track. Use headphones: the browser's echo cancelling cannot hear this output, so with speakers the others may hear themselves back. **If you play on speakers, turn it off.**
+
+### Changed
+- **Enemies in the fog of war are silent in proximity mode too.** Your app tells the server which enemy icons your minimap is drawing, and the server leaves every other enemy out of what you hear, however close. Players on older versions are still heard by distance alone. Needs the matching server build.
+- **Voice on camera hears everything on your screen.** Your app now sends the size of the camera box as well as its centre, and the server hears the champions inside it at full volume, instead of within the hearing range of its centre. The server caps the box at a widescreen's view (about 5000 × 2400 game units), so nobody can claim to see the whole map. Needs the matching server build.
+- **Every setting is switched on once, the first time this version starts:** Camera mode, Ally proximity, Voice on camera, Shared RESET, App audio and Hide IP, so everyone starts from the same settings. Turn any of them off again and it stays off.
+- **Hide IP is on by default.** Voice goes through the relay so other players never see your IP. Turn it off in Settings if you would rather have the ~20-100 ms back.
+- **Shared RESET is on by default.** Turn it off and nobody else's RESET reaches you, as before.
+- **The app finds your icon among your teammates' more reliably.** The champion recogniser now weighs its answer against the five champions actually on your team, so a teammate's icon it half-confuses with yours scores much lower. Icons are also compared with each champion's base icon, which is what the minimap draws whatever skin is on, so the app no longer downloads skin icons.
+
 ## [v0.5.23] — 2026-10-09
 
 ### Fixed
