@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+### Changed
+- **Server: the fog-of-war check and the camera box for Voice on camera are rolled back** (public server, 2026-10-17) after reports of problems in games. The server is back to v0.5.23's. Camera mode is unaffected: it decides who you hear on your own PC, fog of war included. With Camera mode off, enemies are heard by distance again, brush or not, and Voice on camera listens from the camera's centre within the usual range. v0.5.24 apps keep working; the server ignores what they send for these.
+
 ## [v0.5.24] — 2026-10-16
 
 Most of this release was contributed by a tester's friend, who reworked hearing around the camera and tested it in real games.

@@ -19,59 +19,6 @@ export const ROOM_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 // would corrupt any log line or console output carrying the name.
 const CONTROL_CHARS_RE = /[\x00-\x1F\x7F-\x9F]/;
 
-// A camera box can never be bigger than the map (~15000 units on Summoner's
-// Rift); anything past this is garbage, not a camera.
-export const MAX_CAMERA_SPAN = 20_000;
-// The largest box a real screen draws. League's camera zoom is fixed, so the
-// box is a fixed share of the minimap: 85/341 x 47/341 of it at 16:9 (the
-// 2026-10-12 recordings), ~3700 x 2070 units on Summoner's Rift; a 21:9
-// ultrawide draws it ~4900 wide, the same height. A bigger box is clamped to
-// these: everyone inside the box is heard at full volume (with both players'
-// voice on camera on), so an unbounded one would let a modified client hear
-// every such enemy on the map at once. A wider screen still than 21:9 hears a
-// little less than it sees, not nothing.
-export const MAX_CAMERA_WIDTH = 5_000;
-export const MAX_CAMERA_HEIGHT = 2_400;
-// Five enemies, so five icons; a few spare for a sighting held across a frame.
-export const MAX_VISIBLE_ICONS = 10;
-// Champions one red blob can stand for (icons merge when enemies stand
-// together); five is the whole enemy team.
-export const MAX_ICON_COUNT = 5;
-
-/**
- * The camera box size off a `coords` message (cw, ch), clamped to what a real
- * screen draws (MAX_CAMERA_WIDTH x MAX_CAMERA_HEIGHT), or undefined when it
- * carries none or a malformed one — which leaves the camera scored by its
- * centre, as for an older client.
- */
-export function parseCameraSize(cw: unknown, ch: unknown): { w: number; h: number } | undefined {
-  const span = (v: unknown): v is number =>
-    typeof v === 'number' && isFinite(v) && v > 0 && v <= MAX_CAMERA_SPAN;
-  return span(cw) && span(ch)
-    ? { w: Math.min(cw, MAX_CAMERA_WIDTH), h: Math.min(ch, MAX_CAMERA_HEIGHT) }
-    : undefined;
-}
-
-/**
- * The enemy icons a `coords` message says its minimap is drawing (`vis`):
- * [x, y] or [x, y, n] with n the champions the icon holds. Undefined when the
- * message has no list at all — an older client, scored without the fog-of-war
- * check. Malformed entries are dropped one by one, so a client always gets a
- * list (possibly empty) once it sends one.
- */
-export function parseVisibleIcons(vis: unknown): { x: number; y: number; n: number }[] | undefined {
-  if (!Array.isArray(vis)) return undefined;
-  const icons: { x: number; y: number; n: number }[] = [];
-  for (const p of vis.slice(0, MAX_VISIBLE_ICONS)) {
-    if (!Array.isArray(p) || (p.length !== 2 && p.length !== 3)) continue;
-    const [x, y, n = 1] = p;
-    if (typeof x !== 'number' || typeof y !== 'number' || !isFinite(x) || !isFinite(y)) continue;
-    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_ICON_COUNT) continue;
-    icons.push({ x, y, n });
-  }
-  return icons;
-}
-
 export type JoinValidation =
   | { ok: true; room: string; name: string }
   | { ok: false; error: string };

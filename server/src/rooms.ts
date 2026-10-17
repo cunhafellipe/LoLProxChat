@@ -59,7 +59,6 @@ export class RoomManager {
       team: team ?? evicted?.team,
       position: evicted?.position,
       camera: evicted?.camera,
-      visible: evicted?.visible,
       lastSeen: evicted?.lastSeen,
     };
     existing.push(info);
@@ -152,22 +151,10 @@ export class RoomManager {
    * Record a client's latest camera centre ("voice on camera", #36). No-op if
    * the ws isn't in a room.
    */
-  setCamera(ws: WebSocket, x: number, y: number, size?: { w: number; h: number }): void {
+  setCamera(ws: WebSocket, x: number, y: number): void {
     const info = this.clients.get(ws);
     if (!info) return;
-    info.camera = size
-      ? { x, y, w: size.w, h: size.h, updatedMs: Date.now() }
-      : { x, y, updatedMs: Date.now() };
-  }
-
-  /**
-   * Record the enemy icons a client's minimap is drawing, or forget them
-   * (undefined: the client does not send them). No-op if the ws isn't in a room.
-   */
-  setVisible(ws: WebSocket, icons: { x: number; y: number; n: number }[] | undefined): void {
-    const info = this.clients.get(ws);
-    if (!info) return;
-    info.visible = icons ? { icons, updatedMs: Date.now() } : undefined;
+    info.camera = { x, y, updatedMs: Date.now() };
   }
 
   /** Record whether a client has opted in to shared RESET. No-op if the ws
@@ -286,7 +273,6 @@ export class RoomManager {
       team: c.team,
       position: c.position,
       camera: c.camera,
-      visible: c.visible,
       lastSeen: c.lastSeen,
     }));
   }

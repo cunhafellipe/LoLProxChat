@@ -83,7 +83,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 
 **Camera mode** (on by default since v0.5.24) replaces steps 2 and 5: your app reads which players' icons are inside your camera's white box on the minimap and plays exactly those, deciding it on your own PC rather than on the server. **Voice on camera** (proximity mode) also lets you hear what is on your screen, one-way, and only between players who both have it on.
 
-Enemies are heard only while their icon is drawn on your minimap, so an enemy in a brush or in the fog stays silent (between players on v0.5.24 or later). [`docs/compliance.md`](docs/compliance.md) covers this and both camera settings in full.
+In Camera mode, enemies are heard only while their icon is drawn on your minimap, so an enemy in a brush or in the fog stays silent. With Camera mode off, hearing is by distance alone. [`docs/compliance.md`](docs/compliance.md) covers this and both camera settings in full.
 
 For depth, see [`docs/architecture.md`](docs/architecture.md).
 

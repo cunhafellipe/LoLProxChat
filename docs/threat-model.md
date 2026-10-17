@@ -82,7 +82,7 @@ The client-side remnant of this idea — a peer-avoidance penalty in the tracker
 - **It is one-way.** A camera is a point you hear from, never a point you are audible at; peers are always scored at their champion. A v0.5.9 test build made it two-way and players found that worse to play with. Between two opted-in players listening is therefore free — a stated consequence of the feature, bounded by the opt-in rather than by a cost to the listener.
 - **There is no consent flag on the wire to forge.** Presence of the camera in room state *is* the opt-in, and the server reads the requester's own camera from that same stored copy rather than from the request. The pre-v0.5.9 `listenPosition` request field is ignored; `server/tests/volumes.test.ts` and `server/tests/integration.test.ts` both assert that sending it buys nothing, including against a peer who has opted out.
 - A modified client can of course publish a false camera, and listen from anywhere against players who have opted in — which is no more than an honest client with the setting on can do by panning. It still cannot reach a peer who published none.
-- The team filter applies from every point. `MAX_HEARING_RANGE` applies to the champion and to an old-style camera centre; a camera *box* (v0.5.24) is instead bounded by its clamped size — see "Fog of war on the server" below.
+- The team filter and `MAX_HEARING_RANGE` cutoff still apply from every point — the server remains the authority for both.
 
 ### Voice reaches every peer; the volume is applied by the listener
 
@@ -98,12 +98,9 @@ The client-side remnant of this idea — a peer-avoidance penalty in the tracker
 - **What a modified client gains:** nothing beyond the section above. Camera mode adds no server data path, so there is nothing new to forge.
 - **Its effect on the server's data:** the server holds about as much as for a proximity client — its tracked position, as `lastSeen`. Enemies on proximity hear it at 0; teammates on proximity score it at `lastSeen`, or at 1.0 once that is 20 s old.
 
-### Fog of war on the server: `vis`, and the camera box
+### Fog of war on the server (rolled back)
 
-- Since v0.5.24 a proximity client sends, with each `coords` report, the positions of the enemy icons its own minimap is drawing (`vis`: at most 10 `[x, y]` entries, or `[x, y, n]` for merged icons; `MAX_VISIBLE_ICONS` in `server/src/validate.ts`). The server pairs each with the nearest enemies (`matchVisibleEnemies`, within 800 units, at most `n` per icon, closest first) and leaves every other enemy out of that client's volumes. A stale list counts as seeing nobody (fail closed). A client that sends no list at all (older versions) is scored without the check, as before.
-- **It is a one-sided limit.** A modified client can omit `vis` and be scored like an older one, or send icons wherever it likes and hear any enemy within the usual range of itself — which an honest older client already has. It cannot hear an enemy *further* than before: `vis` only removes enemies, it never adds one.
-- **What it adds to what the server holds:** the positions of enemy icons, which include enemies not running the app. The server never sends them on, keeps only the latest list per client in memory, and drops it on disconnect, like `coords`. An operator reading memory learns where a player's team saw enemies — little more than they learn from the positions already there.
-- **The camera box** (`cw`/`ch`, sent with voice on camera's centre): between two players who both have voice on camera on, the server hears the peers inside the requester's camera rectangle at full volume. The server caps the size at **5000 × 2400 game units** (`MAX_CAMERA_WIDTH`/`MAX_CAMERA_HEIGHT` in `server/src/validate.ts`) — a 21:9 screen's rectangle, more than a 16:9 one's ~3700 × 2070 — so a client claiming a map-sized box hears only a screen's worth around its camera centre. Our client always sends `vis` with it, so enemies also pass the fog check; a modified client that omits `vis` hears opted-in enemies anywhere in the clamped box (up to ~3200 units from its centre, with margin), beyond `MAX_HEARING_RANGE`. That is not new reach: the camera centre, like `myPosition` in `/compute-volumes`, is the client's unverified claim, so such a client could already listen from anywhere against opted-in players.
+v0.5.24 shipped with a server-side fog-of-war check (the client sends `vis`, the enemy icons its minimap draws, and the server left every other enemy out of its volumes) and a camera *box* for Voice on camera (`cw`/`ch`, clamped to 5000 × 2400). Both were rolled back on the public server on 2026-10-17 after reports of problems in games; the server is v0.5.23's. v0.5.24 clients still send `vis`, `cw` and `ch`, and the server ignores them. Camera mode is unaffected, since it decides hearing on the client.
 
 ### The server operator can read positions
 
@@ -127,9 +124,8 @@ The calibration argument is map-specific: it compares a distance in Summoner's R
 | WebSocket heartbeat (30 s ping, one missed pong) | **Applied** | Terminates a half-open connection within ~60 s, removing that player from room state. This is the liveness guarantee for allies, who skip the stale-position window because ally voice is global. |
 | Hearing range ≈ champion vision range | **Applied** | `MAX_HEARING_RANGE` is sized so audio only reveals enemies a stock client would roughly already sense. |
 | Proximity disabled on maps with no known coordinate system | **Applied** | Unrecognised maps used to fall back to Summoner's Rift dimensions, producing hearing distances unrelated to in-game distance. No coordinates are broadcast on such a map at all. |
-| Fog-of-war gate on cross-team audio (`vis`) | **Applied** (v0.5.24) | An enemy is scored only when matched to an icon on the requester's own minimap, which the game draws only while their team has vision — brush, terrain and wards included. Fail closed on a stale list; clients that send none are scored as before. See "Fog of war on the server" above. |
-| Camera box size cap | **Applied** (v0.5.24) | The camera box is clamped to 5000 × 2400 game units, a 21:9 screen's view, so a modified client cannot claim the whole map. |
-| Line-of-sight gate against a static vision mesh | Not applied | Superseded by the minimap gate above, which also covers wards. |
+| Fog-of-war gate on cross-team audio (server, `vis`) | Not applied (rolled back) | Shipped in v0.5.24, rolled back on 2026-10-17. Camera mode applies the same rule on the client. See "Fog of war on the server" above. |
+| Line-of-sight gate against a static vision mesh | Not applied | A minimap-based gate also covers wards; see the row above. |
 | Server-mixed audio (SFU/MCU) | Not applied | The only way to make the volume vector binding on a modified client. Moves all voice through our infrastructure. |
 | Drop volumes below a noise floor | Not applied | Would prevent "barely audible = exactly N units away" signaling |
 | Snap positions to a coarse grid client-side | Not applied | Lossy at source; slightly degrades volume accuracy for legitimate users. Would also reduce what a compromised server can see. |
