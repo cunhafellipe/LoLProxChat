@@ -39,18 +39,6 @@ export interface ClientMessage {
   // setting off — in both cases the pair is scored champion to champion.
   cx?: number;
   cy?: number;
-  // 'coords' only, alongside cx/cy — the camera rectangle's width and height
-  // in game units. With them the camera is scored as the box on the player's
-  // screen; without them (older clients, or a frame where the box was not
-  // readable) as its centre plus the hearing range, as before.
-  cw?: number;
-  ch?: number;
-  // 'coords' only — the enemy icons this client's minimap is drawing, as
-  // [x, y] or [x, y, n] (n champions in one merged icon), game coordinates.
-  // The minimap draws only enemies the team can see, so a cross-team peer is
-  // audible to this client only when one of these is theirs: nothing the fog
-  // of war hides. Absent from older clients, which are scored as before.
-  vis?: unknown;
   // v0.3: team identifier on 'join' (ORDER / CHAOS). Optional for back-compat
   // — a v0.2 client omits it and the server falls back to team-blind behavior.
   team?: 'ORDER' | 'CHAOS';
@@ -83,11 +71,7 @@ export interface ClientInfo {
   // Latest camera centre reported via 'coords' (#36, "voice on camera").
   // Undefined when the client has the setting off, predates v0.5.9, or has
   // not reported one yet. See ClientMessage.cx — presence is consent.
-  // `w`/`h` are the camera box's size, when the client sent it (cw/ch).
-  camera?: { x: number; y: number; w?: number; h?: number; updatedMs: number };
-  // Enemy icons the client's minimap is drawing (`vis`), from its latest
-  // report. Undefined for a client that does not send them (older builds).
-  visible?: { icons: { x: number; y: number; n: number }[]; updatedMs: number };
+  camera?: { x: number; y: number; updatedMs: number };
   // Where the client last saw itself, as it said when it disowned its
   // position (`coords` with stale and seen). Used for nothing but its
   // teammates' volumes, and only for a short while — see LOST_ALLY_ANCHOR_MS
